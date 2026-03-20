@@ -1,4 +1,4 @@
-﻿name: Build and Push Docker Image
+name: Build and Push Docker Image
 
 on:
   push:
@@ -7,76 +7,60 @@ on:
     paths:
       - 'NeXroll/**'
       - 'Dockerfile'
+      - 'entrypoint.sh'
       - 'requirements.txt'
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g., v1.10.14) - leave empty for dev build'
+        description: 'Version tag (e.g., v1.12.0) - leave empty for dev build'
         required: false
         default: ''
 
 env:
-  REGISTRY: docker.io
-  IMAGE_NAME: jbrns/nexroll
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/artic5693/nexroll
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    # SAFETY: Only run on the artic5693 fork, never on upstream
+    if: github.repository == 'artic5693/NeXroll'
     permissions:
       contents: read
       packages: write
 
     steps:
+      # SAFETY: Abort if somehow running on the wrong repo
+      - name: Verify repository ownership
+        run: |
+          if [ "${{ github.repository }}" != "artic5693/NeXroll" ]; then
+            echo "ERROR: This workflow must only run on artic5693/NeXroll, not ${{ github.repository }}"
+            exit 1
+          fi
+
       - name: Get version
         id: version
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            VERSION="${{ github.event.release.tag_name }}"
-            IS_PRERELEASE="${{ github.event.release.prerelease }}"
-            IS_DEV="false"
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             INPUT_VERSION="${{ github.event.inputs.version }}"
             if [ -z "$INPUT_VERSION" ]; then
-              # No version provided - treat as dev build
               VERSION="dev"
-              IS_PRERELEASE="false"
               IS_DEV="true"
             else
               VERSION="$INPUT_VERSION"
               IS_DEV="false"
-              # Check if version contains beta/rc/alpha
-              if [[ "$VERSION" =~ (beta|rc|alpha) ]]; then
-                IS_PRERELEASE="true"
-              else
-                IS_PRERELEASE="false"
-              fi
             fi
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            # Push to main - dev build
-            VERSION="dev"
-            IS_PRERELEASE="false"
-            IS_DEV="true"
           else
-            VERSION="${{ github.ref_name }}"
-            IS_PRERELEASE="false"
-            IS_DEV="false"
+            VERSION="dev"
+            IS_DEV="true"
           fi
-          # Remove 'v' prefix for Docker tag
           VERSION_NUM="${VERSION#v}"
           SHORT_SHA="${{ github.sha }}"
           SHORT_SHA="${SHORT_SHA:0:7}"
           echo "version=${VERSION_NUM}" >> $GITHUB_OUTPUT
           echo "tag=${VERSION}" >> $GITHUB_OUTPUT
-          echo "is_prerelease=${IS_PRERELEASE}" >> $GITHUB_OUTPUT
           echo "is_dev=${IS_DEV}" >> $GITHUB_OUTPUT
           echo "short_sha=${SHORT_SHA}" >> $GITHUB_OUTPUT
-          echo "Version: ${VERSION_NUM}"
-          echo "Tag: ${VERSION}"
-          echo "Is Pre-release: ${IS_PRERELEASE}"
-          echo "Is Dev: ${IS_DEV}"
-          echo "Short SHA: ${SHORT_SHA}"
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -102,32 +86,24 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to Docker Hub
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Determine Docker tags
         id: docker_tags
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          IS_PRERELEASE="${{ steps.version.outputs.is_prerelease }}"
           IS_DEV="${{ steps.version.outputs.is_dev }}"
           SHORT_SHA="${{ steps.version.outputs.short_sha }}"
-          
+
           if [ "$IS_DEV" = "true" ]; then
-            # Dev build: tag with 'dev' and commit sha
             echo "tags=${{ env.IMAGE_NAME }}:dev,${{ env.IMAGE_NAME }}:sha-${SHORT_SHA}" >> $GITHUB_OUTPUT
-            echo "Using dev tags: dev, sha-${SHORT_SHA}"
-          elif [ "$IS_PRERELEASE" = "true" ]; then
-            # Pre-release: tag with version and 'beta'
-            echo "tags=${{ env.IMAGE_NAME }}:${VERSION},${{ env.IMAGE_NAME }}:beta" >> $GITHUB_OUTPUT
-            echo "Using beta tags: ${VERSION}, beta"
           else
-            # Stable release: tag with version and 'latest'
             echo "tags=${{ env.IMAGE_NAME }}:${VERSION},${{ env.IMAGE_NAME }}:latest" >> $GITHUB_OUTPUT
-            echo "Using stable tags: ${VERSION}, latest"
           fi
 
       - name: Build and push Docker image
@@ -135,7 +111,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.docker_tags.outputs.tags }}
           build-args: |
