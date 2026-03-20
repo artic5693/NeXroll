@@ -7601,6 +7601,9 @@ def delete_preroll(preroll_id: int, db: Session = Depends(get_db)):
         if not preroll:
             raise HTTPException(status_code=404, detail="Preroll not found")
 
+        # Cache attributes before raw SQL delete invalidates the ORM object
+        preroll_filename = preroll.filename
+
         # Delete the actual files (do not delete external mapped files)
         try:
             # Handle new path structure
@@ -7677,7 +7680,7 @@ def delete_preroll(preroll_id: int, db: Session = Depends(get_db)):
             dbapi_conn.rollback()
             raise e
 
-        log_event('INFO', 'user', f"Preroll '{preroll.filename}' deleted", details={"preroll_id": preroll_id})
+        log_event('INFO', 'user', f"Preroll '{preroll_filename}' deleted", details={"preroll_id": preroll_id})
         return {"message": "Preroll deleted successfully"}
     except HTTPException:
         raise
@@ -10753,7 +10756,7 @@ def _unmangle_community_id(mangled_id: str) -> Optional[str]:
 @app.post("/sequences/{sequence_id}/export")
 def export_sequence_pattern(
     sequence_id: int, 
-    export_mode: str = Query("pattern_only", regex="^(pattern_only|with_community_ids|with_preroll_data|full_bundle)$"),
+    export_mode: str = Query("pattern_only", pattern="^(pattern_only|with_community_ids|with_preroll_data|full_bundle)$"),
     db: Session = Depends(get_db)
 ):
     """
@@ -16029,9 +16032,10 @@ async def download_diagnostics(db: Session = Depends(get_db)):
 @app.get("/nexup/youtube/status")
 def get_youtube_status(db: Session = Depends(get_db)):
     """Check if YouTube authentication is set up and working"""
+    import tempfile
     setting = db.query(models.Setting).first()
-    storage_path = getattr(setting, 'nexup_storage_path', None) or 'temp'
-    
+    storage_path = getattr(setting, 'nexup_storage_path', None) or os.path.join(tempfile.gettempdir(), 'nexroll-nexup')
+
     status = {
         "configured": False,
         "method": None,
@@ -16042,30 +16046,34 @@ def get_youtube_status(db: Session = Depends(get_db)):
         "browser_locked": True,
         "message": "YouTube authentication not configured"
     }
-    
+
     # Check for OAuth file first (most reliable, doesn't expire)
     oauth_file = Path(storage_path) / 'youtube_oauth.json'
     status['oauth_file'] = str(oauth_file)
-    
+
     if oauth_file.exists():
         status['configured'] = True
         status['method'] = 'oauth'
         status['message'] = "YouTube configured via OAuth (recommended)"
         return status
-    
+
     # Check for cookies file (reliable but can expire)
     cookies_file = Path(storage_path) / 'youtube_cookies.txt'
     status['cookies_file'] = str(cookies_file)
-    
+
     if cookies_file.exists():
         status['configured'] = True
         status['method'] = 'cookies_file'
         status['message'] = "YouTube configured via cookies file"
         return status
-    
+
     # Check for browser cookies
     from backend.radarr_connector import TrailerDownloader
-    downloader = TrailerDownloader(storage_path, '1080')
+    try:
+        downloader = TrailerDownloader(storage_path, '1080')
+    except (PermissionError, OSError):
+        status['message'] = "YouTube status unavailable: storage path not accessible"
+        return status
     browser = downloader.get_cookie_browser()
     
     if browser:
@@ -17479,10 +17487,15 @@ def get_nexup_storage(db: Session = Depends(get_db)):
         }
     
     from backend.radarr_connector import TrailerDownloader
-    
-    downloader = TrailerDownloader(storage_path)
-    usage = downloader.get_storage_usage()
-    
+
+    try:
+        downloader = TrailerDownloader(storage_path)
+        usage = downloader.get_storage_usage()
+    except PermissionError:
+        raise HTTPException(status_code=400, detail=f"Permission denied: cannot access storage path '{storage_path}'")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid storage path '{storage_path}': {e}")
+
     return {
         "configured": True,
         "path": storage_path,
@@ -21875,9 +21888,13 @@ def _build_prerolls_index(progress_callback=None, base_url=None) -> dict:
                         _file_log(f"  ✓ Found: {title[:60]}")
         except json.JSONDecodeError as e:
             _file_log(f"✗ JSON parse error for {url}: {e}")
+        except requests.exceptions.Timeout:
+            _file_log(f"✗ Timeout after 10s fetching {url}")
+        except requests.exceptions.ConnectionError as e:
+            _file_log(f"✗ Connection error for {url}: {e}")
         except Exception as e:
             import traceback
-            _file_log(f"✗ Error indexing {url}: {e}")
+            _file_log(f"✗ Error indexing {url}: {type(e).__name__}: {e}")
             _file_log(f"  Traceback: {traceback.format_exc()}")
     
     # Build the index by scraping from root to discover all folders
@@ -22088,9 +22105,11 @@ def build_community_prerolls_index(request: Request, db: Session = Depends(get_d
     except HTTPException:
         raise
     except Exception as e:
-        _file_log(f"Error building prerolls index: {e}")
-        log_event('ERROR', 'system', f'Community index build failed: {e}', source='build_community_index')
-        raise HTTPException(status_code=500, detail=f"Failed to build index: {str(e)}")
+        import traceback
+        tb = traceback.format_exc()
+        _file_log(f"Error building prerolls index: {type(e).__name__}: {e}\n{tb}")
+        log_event('ERROR', 'system', f'Community index build failed: {type(e).__name__}: {e}', source='build_community_index', details={"traceback": tb})
+        raise HTTPException(status_code=500, detail=f"Failed to build index: {type(e).__name__}: {e}")
     finally:
         _index_build_lock = False
 
