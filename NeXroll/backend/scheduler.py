@@ -19,11 +19,13 @@ from backend.database import SessionLocal
 
 # Logging helpers - direct file writes to avoid circular imports
 def _get_log_path():
-    """Get the log file path"""
+    """Get the log file path, using the same writable directory as main.py"""
     if sys.platform == "win32":
         log_dir = os.path.join(os.environ.get("PROGRAMDATA", "C:\\ProgramData"), "NeXroll", "logs")
     else:
-        log_dir = "/var/log/nexroll"
+        # Use the data dir (writable by PUID) with logs subfolder
+        data_dir = os.environ.get("NEXROLL_DB_DIR", "/data")
+        log_dir = os.path.join(data_dir, "logs")
     os.makedirs(log_dir, exist_ok=True)
     return os.path.join(log_dir, "app.log")
 
