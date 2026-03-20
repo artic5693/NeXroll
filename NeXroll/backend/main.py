@@ -56,6 +56,23 @@ from backend.dynamic_preroll import DynamicPrerollGenerator, set_verbose_logger 
 
 models.Base.metadata.create_all(bind=engine)
 
+
+# --- Helpers: read API keys from secure_store with DB fallback ---
+def _get_radarr_api_key(setting) -> str | None:
+    """Get Radarr API key from secure store, falling back to DB column."""
+    key = secure_store.get_radarr_api_key()
+    if key:
+        return key
+    return _get_radarr_api_key(setting) if setting else None
+
+
+def _get_sonarr_api_key(setting) -> str | None:
+    """Get Sonarr API key from secure store, falling back to DB column."""
+    key = secure_store.get_sonarr_api_key()
+    if key:
+        return key
+    return _get_sonarr_api_key(setting) if setting else None
+
 # Lightweight runtime schema upgrades for older SQLite databases
 def _sqlite_has_column(table: str, column: str) -> bool:
     try:
@@ -1736,16 +1753,28 @@ def _build_plex_headers() -> dict:
         headers.setdefault("X-Plex-Client-Identifier", str(uuid.uuid4()))
     return headers
 
-# CORS middleware for frontend integration
-# allow_origin_regex also permits any Jellyfin/Emby web UI origin to reach /plugin/* routes.
-# The plugin endpoints use API-key auth so open CORS is safe.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=r".*",   # plugin routes need any origin; API key provides real security
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS middleware — restrict to local/private origins by default.
+# Override with NEXROLL_CORS_ORIGINS env var (comma-separated) for plugin routes
+# that need open CORS (e.g., Jellyfin/Emby web UIs on non-standard origins).
+_cors_env = os.environ.get("NEXROLL_CORS_ORIGINS", "").strip()
+if _cors_env:
+    _cors_origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    # Allow localhost and RFC-1918 private ranges only
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$",
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 # Log unhandled exceptions and 4xx/5xx responses to writable logs (with fallback)
 @app.middleware("http")
@@ -2040,7 +2069,13 @@ def startup_env_bootstrap():
     except Exception:
         # keep server healthy regardless of failures here
         pass
-    
+
+    # Migrate Radarr/Sonarr API keys from plaintext DB to secure_store
+    try:
+        _migrate_api_keys_to_secure_store()
+    except Exception:
+        pass
+
     # Auto-refresh variable-date holiday schedules on startup (once per day)
     try:
         _auto_refresh_holiday_dates()
@@ -14524,7 +14559,7 @@ def get_nexup_settings(user: models.User = Depends(require_auth), db: Session = 
     return {
         "enabled": getattr(setting, 'nexup_enabled', False),
         "radarr_url": getattr(setting, 'nexup_radarr_url', None),
-        "radarr_connected": bool(getattr(setting, 'nexup_radarr_url', None) and getattr(setting, 'nexup_radarr_api_key', None)),
+        "radarr_connected": bool(getattr(setting, 'nexup_radarr_url', None) and _get_radarr_api_key(setting)),
         "storage_path": getattr(setting, 'nexup_storage_path', None),
         "quality": getattr(setting, 'nexup_quality', '1080'),
         "days_ahead": getattr(setting, 'nexup_days_ahead', 90),
@@ -14544,7 +14579,7 @@ def get_nexup_settings(user: models.User = Depends(require_auth), db: Session = 
         # Sonarr settings
         "sonarr_enabled": getattr(setting, 'nexup_sonarr_enabled', False),
         "sonarr_url": getattr(setting, 'nexup_sonarr_url', None),
-        "sonarr_connected": bool(getattr(setting, 'nexup_sonarr_url', None) and getattr(setting, 'nexup_sonarr_api_key', None)),
+        "sonarr_connected": bool(getattr(setting, 'nexup_sonarr_url', None) and _get_sonarr_api_key(setting)),
         "tv_category_id": getattr(setting, 'nexup_tv_category_id', None),
         "last_sonarr_sync": last_sonarr.isoformat() if last_sonarr else None,
         "next_sonarr_sync": next_sonarr,
@@ -14784,10 +14819,11 @@ async def connect_radarr(
                 db.refresh(setting)
             
             setting.nexup_radarr_url = url
-            setting.nexup_radarr_api_key = api_key
+            setting.nexup_radarr_api_key = None  # stored in secure_store
+            secure_store.set_radarr_api_key(api_key)
             setting.updated_at = datetime.datetime.utcnow()
             db.commit()
-            
+
             _file_log(f"Radarr connected: {result.get('appName')} v{result.get('version')}")
             log_event('INFO', 'nexup', f'Radarr connected: {result.get("appName")} v{result.get("version")}', source='connect_radarr')
             return {
@@ -14817,9 +14853,10 @@ def disconnect_radarr(db: Session = Depends(get_db)):
     if setting:
         setting.nexup_radarr_url = None
         setting.nexup_radarr_api_key = None
+        secure_store.delete_radarr_api_key()
         setting.updated_at = datetime.datetime.utcnow()
         db.commit()
-    
+
     _file_log("Radarr disconnected")
     log_event('INFO', 'nexup', 'Radarr disconnected', source='disconnect_radarr')
     return {"success": True, "message": "Radarr disconnected"}
@@ -14828,12 +14865,12 @@ def disconnect_radarr(db: Session = Depends(get_db)):
 async def get_upcoming_movies(db: Session = Depends(get_db)):
     """Get list of upcoming movies from Radarr"""
     setting = db.query(models.Setting).first()
-    if not setting or not setting.nexup_radarr_url or not setting.nexup_radarr_api_key:
+    if not setting or not setting.nexup_radarr_url or not _get_radarr_api_key(setting):
         raise HTTPException(status_code=400, detail="Radarr not connected")
     
     from backend.radarr_connector import RadarrConnector
     
-    connector = RadarrConnector(setting.nexup_radarr_url, setting.nexup_radarr_api_key)
+    connector = RadarrConnector(setting.nexup_radarr_url, _get_radarr_api_key(setting))
     days_ahead = getattr(setting, 'nexup_days_ahead', 90) or 90
     include_unmonitored = getattr(setting, 'nexup_include_unmonitored_movies', False)
     release_date_preference = getattr(setting, 'nexup_release_date_preference', 'digital_first')
@@ -14889,12 +14926,12 @@ async def get_upcoming_movies(db: Session = Depends(get_db)):
 async def debug_radarr_movie(radarr_id: int, db: Session = Depends(get_db)):
     """Debug endpoint to see raw Radarr movie data including trailer info"""
     setting = db.query(models.Setting).first()
-    if not setting or not setting.nexup_radarr_url or not setting.nexup_radarr_api_key:
+    if not setting or not setting.nexup_radarr_url or not _get_radarr_api_key(setting):
         raise HTTPException(status_code=400, detail="Radarr not connected")
     
     from backend.radarr_connector import RadarrConnector
     
-    connector = RadarrConnector(setting.nexup_radarr_url, setting.nexup_radarr_api_key)
+    connector = RadarrConnector(setting.nexup_radarr_url, _get_radarr_api_key(setting))
     movie = await connector.get_movie_by_id(radarr_id)
     
     if not movie:
@@ -14952,7 +14989,8 @@ async def connect_sonarr(
                 db.refresh(setting)
             
             setting.nexup_sonarr_url = url
-            setting.nexup_sonarr_api_key = api_key
+            setting.nexup_sonarr_api_key = None  # stored in secure_store
+            secure_store.set_sonarr_api_key(api_key)
             setting.nexup_sonarr_enabled = True
             setting.updated_at = datetime.datetime.utcnow()
             db.commit()
@@ -14986,10 +15024,11 @@ def disconnect_sonarr(db: Session = Depends(get_db)):
     if setting:
         setting.nexup_sonarr_url = None
         setting.nexup_sonarr_api_key = None
+        secure_store.delete_sonarr_api_key()
         setting.nexup_sonarr_enabled = False
         setting.updated_at = datetime.datetime.utcnow()
         db.commit()
-    
+
     _file_log("Sonarr disconnected")
     log_event('INFO', 'nexup', 'Sonarr disconnected', source='disconnect_sonarr')
     return {"success": True, "message": "Sonarr disconnected"}
@@ -14998,14 +15037,14 @@ def disconnect_sonarr(db: Session = Depends(get_db)):
 async def get_upcoming_shows(db: Session = Depends(get_db)):
     """Get list of upcoming TV show premieres from Sonarr"""
     setting = db.query(models.Setting).first()
-    if not setting or not getattr(setting, 'nexup_sonarr_url', None) or not getattr(setting, 'nexup_sonarr_api_key', None):
+    if not setting or not getattr(setting, 'nexup_sonarr_url', None) or not _get_sonarr_api_key(setting):
         _file_log("Sonarr: Get upcoming shows failed - not connected")
         raise HTTPException(status_code=400, detail="Sonarr not connected")
     
     from backend.sonarr_connector import SonarrConnector
     
     _file_log(f"Sonarr: Fetching upcoming shows from {setting.nexup_sonarr_url}")
-    connector = SonarrConnector(setting.nexup_sonarr_url, setting.nexup_sonarr_api_key)
+    connector = SonarrConnector(setting.nexup_sonarr_url, _get_sonarr_api_key(setting))
     days_ahead = getattr(setting, 'nexup_days_ahead', 90) or 90
     include_unmonitored = getattr(setting, 'nexup_include_unmonitored_shows', False)
     
@@ -15121,7 +15160,7 @@ async def download_tv_trailer(
     from backend.radarr_connector import TrailerDownloader
     
     # Get show info from Sonarr
-    connector = SonarrConnector(setting.nexup_sonarr_url, setting.nexup_sonarr_api_key)
+    connector = SonarrConnector(setting.nexup_sonarr_url, _get_sonarr_api_key(setting))
     all_series = await connector.get_all_series()
     
     show_info = None
@@ -15419,9 +15458,9 @@ async def _auto_regenerate_coming_soon_list(db: Session):
         
         # Get movies from Radarr API
         if source in ["movies", "both"]:
-            if setting.nexup_radarr_url and setting.nexup_radarr_api_key:
+            if setting.nexup_radarr_url and _get_radarr_api_key(setting):
                 try:
-                    radarr_connector = RadarrConnector(setting.nexup_radarr_url, setting.nexup_radarr_api_key)
+                    radarr_connector = RadarrConnector(setting.nexup_radarr_url, _get_radarr_api_key(setting))
                     release_date_pref = getattr(setting, 'nexup_release_date_preference', 'digital_first')
                     movies = await radarr_connector.get_upcoming_movies(days_ahead, release_date_preference=release_date_pref)
                     for movie in movies:
@@ -15447,9 +15486,9 @@ async def _auto_regenerate_coming_soon_list(db: Session):
         
         # Get shows from Sonarr API
         if source in ["shows", "both"]:
-            if getattr(setting, 'nexup_sonarr_url', None) and getattr(setting, 'nexup_sonarr_api_key', None):
+            if getattr(setting, 'nexup_sonarr_url', None) and _get_sonarr_api_key(setting):
                 try:
-                    sonarr_connector = SonarrConnector(setting.nexup_sonarr_url, setting.nexup_sonarr_api_key)
+                    sonarr_connector = SonarrConnector(setting.nexup_sonarr_url, _get_sonarr_api_key(setting))
                     include_unmonitored_shows = getattr(setting, 'nexup_include_unmonitored_shows', False)
                     shows = await sonarr_connector.get_upcoming_premieres(days_ahead, include_unmonitored=include_unmonitored_shows)
                     for show in shows:
@@ -15632,7 +15671,7 @@ async def sync_sonarr_trailers(db: Session = Depends(get_db)):
     from backend.sonarr_connector import SonarrConnector, TVTrailerFetcher
     from backend.radarr_connector import TrailerDownloader
     
-    connector = SonarrConnector(setting.nexup_sonarr_url, setting.nexup_sonarr_api_key)
+    connector = SonarrConnector(setting.nexup_sonarr_url, _get_sonarr_api_key(setting))
     days_ahead = getattr(setting, 'nexup_days_ahead', 90) or 90
     max_trailers = getattr(setting, 'nexup_max_trailers', 10) or 10
     download_delay = getattr(setting, 'nexup_download_delay', 5) or 5
@@ -16723,7 +16762,7 @@ async def download_trailer(radarr_movie_id: int, db: Session = Depends(get_db)):
     """Download a specific trailer by Radarr movie ID"""
     
     setting = db.query(models.Setting).first()
-    if not setting or not setting.nexup_radarr_url or not setting.nexup_radarr_api_key:
+    if not setting or not setting.nexup_radarr_url or not _get_radarr_api_key(setting):
         raise HTTPException(status_code=400, detail="Radarr not connected")
     
     storage_path = getattr(setting, 'nexup_storage_path', None)
@@ -16750,7 +16789,7 @@ async def download_trailer(radarr_movie_id: int, db: Session = Depends(get_db)):
     
     try:
         # Get movie details from Radarr
-        connector = RadarrConnector(setting.nexup_radarr_url, setting.nexup_radarr_api_key)
+        connector = RadarrConnector(setting.nexup_radarr_url, _get_radarr_api_key(setting))
         movie = await connector.get_movie_by_id(radarr_movie_id)
         
         if not movie:
@@ -17162,7 +17201,7 @@ async def sync_nexup(db: Session = Depends(get_db)):
     global _nexup_sync_progress
     
     setting = db.query(models.Setting).first()
-    if not setting or not setting.nexup_radarr_url or not setting.nexup_radarr_api_key:
+    if not setting or not setting.nexup_radarr_url or not _get_radarr_api_key(setting):
         raise HTTPException(status_code=400, detail="Radarr not connected")
     
     storage_path = getattr(setting, 'nexup_storage_path', None)
@@ -17184,7 +17223,7 @@ async def sync_nexup(db: Session = Depends(get_db)):
     
     from backend.radarr_connector import RadarrConnector, TrailerDownloader
     
-    connector = RadarrConnector(setting.nexup_radarr_url, setting.nexup_radarr_api_key)
+    connector = RadarrConnector(setting.nexup_radarr_url, _get_radarr_api_key(setting))
     max_duration = getattr(setting, 'nexup_max_trailer_duration', 180) or 0
     
     # Debug: Log storage path and cookie file status
@@ -18056,9 +18095,9 @@ async def generate_coming_soon_list(
     
     # Get movies from Radarr API
     if source in ["movies", "both"]:
-        if setting.nexup_radarr_url and setting.nexup_radarr_api_key:
+        if setting.nexup_radarr_url and _get_radarr_api_key(setting):
             try:
-                radarr_connector = RadarrConnector(setting.nexup_radarr_url, setting.nexup_radarr_api_key)
+                radarr_connector = RadarrConnector(setting.nexup_radarr_url, _get_radarr_api_key(setting))
                 release_date_pref = getattr(setting, 'nexup_release_date_preference', 'digital_first')
                 movies = await radarr_connector.get_upcoming_movies(days_ahead, release_date_preference=release_date_pref)
                 for movie in movies:
@@ -18086,9 +18125,9 @@ async def generate_coming_soon_list(
     
     # Get shows from Sonarr API
     if source in ["shows", "both"]:
-        if getattr(setting, 'nexup_sonarr_url', None) and getattr(setting, 'nexup_sonarr_api_key', None):
+        if getattr(setting, 'nexup_sonarr_url', None) and _get_sonarr_api_key(setting):
             try:
-                sonarr_connector = SonarrConnector(setting.nexup_sonarr_url, setting.nexup_sonarr_api_key)
+                sonarr_connector = SonarrConnector(setting.nexup_sonarr_url, _get_sonarr_api_key(setting))
                 include_unmonitored_shows = getattr(setting, 'nexup_include_unmonitored_shows', False)
                 shows = await sonarr_connector.get_upcoming_premieres(days_ahead, include_unmonitored=include_unmonitored_shows)
                 for show in shows:
@@ -18289,9 +18328,9 @@ async def preview_coming_soon_list(
     
     # Get movies from Radarr API
     if source in ["movies", "both"]:
-        if setting.nexup_radarr_url and setting.nexup_radarr_api_key:
+        if setting.nexup_radarr_url and _get_radarr_api_key(setting):
             try:
-                radarr_connector = RadarrConnector(setting.nexup_radarr_url, setting.nexup_radarr_api_key)
+                radarr_connector = RadarrConnector(setting.nexup_radarr_url, _get_radarr_api_key(setting))
                 release_date_pref = getattr(setting, 'nexup_release_date_preference', 'digital_first')
                 movies = await radarr_connector.get_upcoming_movies(days_ahead, release_date_preference=release_date_pref)
                 for movie in movies:
@@ -18308,9 +18347,9 @@ async def preview_coming_soon_list(
     
     # Get shows from Sonarr API
     if source in ["shows", "both"]:
-        if getattr(setting, 'nexup_sonarr_url', None) and getattr(setting, 'nexup_sonarr_api_key', None):
+        if getattr(setting, 'nexup_sonarr_url', None) and _get_sonarr_api_key(setting):
             try:
-                sonarr_connector = SonarrConnector(setting.nexup_sonarr_url, setting.nexup_sonarr_api_key)
+                sonarr_connector = SonarrConnector(setting.nexup_sonarr_url, _get_sonarr_api_key(setting))
                 include_unmonitored_shows = getattr(setting, 'nexup_include_unmonitored_shows', False)
                 shows = await sonarr_connector.get_upcoming_premieres(days_ahead, include_unmonitored=include_unmonitored_shows)
                 for show in shows:
@@ -20095,7 +20134,7 @@ def diagnostics_bundle(db: Session = Depends(get_db)):
         ts = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         tmp_path = os.path.join(tempfile.gettempdir(), f"NeXroll_Diagnostics_{ts}.zip")
 
-        # ---- sensitive-value inventory from DB settings ----
+        # ---- sensitive-value inventory from DB settings + secure_store ----
         _sensitive_values = set()
         try:
             setting = db.query(models.Setting).first()
@@ -20110,8 +20149,17 @@ def diagnostics_bundle(db: Session = Depends(get_db)):
                     val = getattr(setting, attr, None)
                     if val and str(val).strip():
                         _sensitive_values.add(str(val).strip())
-                        # Also catch the value without trailing slash
                         _sensitive_values.add(str(val).strip().rstrip("/"))
+            # Also include keys from secure_store (may not be in DB)
+            for _ss_get in (secure_store.get_radarr_api_key, secure_store.get_sonarr_api_key,
+                            secure_store.get_plex_token, secure_store.get_jellyfin_api_key,
+                            secure_store.get_emby_api_key):
+                try:
+                    _ss_val = _ss_get()
+                    if _ss_val and str(_ss_val).strip():
+                        _sensitive_values.add(str(_ss_val).strip())
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -23787,6 +23835,47 @@ def _bootstrap_jellyfin_from_env() -> None:
         # keep server healthy regardless of failures here
         pass
 
+
+def _migrate_api_keys_to_secure_store() -> None:
+    """
+    One-time migration: move Radarr/Sonarr API keys from plaintext DB columns
+    to the secure_store. Clears the DB column after successful migration.
+    """
+    try:
+        db = SessionLocal()
+        try:
+            setting = db.query(models.Setting).first()
+            if not setting:
+                return
+            changed = False
+            # Radarr
+            db_radarr_key = getattr(setting, 'nexup_radarr_api_key', None)
+            if db_radarr_key and not secure_store.has_radarr_api_key():
+                secure_store.set_radarr_api_key(db_radarr_key)
+                setting.nexup_radarr_api_key = None
+                changed = True
+            # Sonarr
+            db_sonarr_key = getattr(setting, 'nexup_sonarr_api_key', None)
+            if db_sonarr_key and not secure_store.has_sonarr_api_key():
+                secure_store.set_sonarr_api_key(db_sonarr_key)
+                setting.nexup_sonarr_api_key = None
+                changed = True
+            if changed:
+                setting.updated_at = datetime.datetime.utcnow()
+                db.commit()
+                try:
+                    _file_log("Migrated Radarr/Sonarr API keys from DB to secure store")
+                except Exception:
+                    pass
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 # ============================================================================
 # Dashboard Statistics Endpoint
 # ============================================================================
@@ -23908,8 +23997,8 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
         
         if setting:
             nexup_stats["enabled"] = getattr(setting, 'nexup_enabled', False) or getattr(setting, 'nexup_sonarr_enabled', False)
-            nexup_stats["radarr_connected"] = bool(getattr(setting, 'nexup_radarr_url', None) and getattr(setting, 'nexup_radarr_api_key', None))
-            nexup_stats["sonarr_connected"] = bool(getattr(setting, 'nexup_sonarr_url', None) and getattr(setting, 'nexup_sonarr_api_key', None))
+            nexup_stats["radarr_connected"] = bool(getattr(setting, 'nexup_radarr_url', None) and _get_radarr_api_key(setting))
+            nexup_stats["sonarr_connected"] = bool(getattr(setting, 'nexup_sonarr_url', None) and _get_sonarr_api_key(setting))
             nexup_stats["storage_limit_gb"] = getattr(setting, 'nexup_max_storage_gb', 5.0) or 5.0
             
             # Count trailers by category

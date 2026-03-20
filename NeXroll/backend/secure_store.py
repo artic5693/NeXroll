@@ -315,6 +315,10 @@ def _dpapi_file_set(name: str, value: str) -> bool:
         store[name] = base64.b64encode(cipher).decode("ascii")
 
         _atomic_write(fp, json.dumps(store, indent=2).encode("utf-8"))
+        try:
+            os.chmod(fp, 0o600)
+        except Exception:
+            pass
         return True
     except Exception:
         return False
@@ -399,6 +403,10 @@ def _plain_file_set(name: str, value: str) -> bool:
                 store = {}
         store[name] = {"b64": base64.b64encode(value.encode("utf-8")).decode("ascii")}
         _atomic_write(fp, json.dumps(store, indent=2).encode("utf-8"))
+        try:
+            os.chmod(fp, 0o600)
+        except Exception:
+            pass
         return True
     except Exception:
         return False
@@ -623,3 +631,39 @@ def set_emby_api_key(api_key: str) -> bool:
 
 def delete_emby_api_key() -> bool:
     return delete_secret(_EMBY_API_KEY)
+
+# ----------------------------
+# Convenience for Radarr API key
+# ----------------------------
+
+_RADARR_API_KEY = "radarr_api_key"
+
+def has_radarr_api_key() -> bool:
+    return has_secret(_RADARR_API_KEY)
+
+def get_radarr_api_key() -> Optional[str]:
+    return get_secret(_RADARR_API_KEY)
+
+def set_radarr_api_key(api_key: str) -> bool:
+    return set_secret(_RADARR_API_KEY, api_key)
+
+def delete_radarr_api_key() -> bool:
+    return delete_secret(_RADARR_API_KEY)
+
+# ----------------------------
+# Convenience for Sonarr API key
+# ----------------------------
+
+_SONARR_API_KEY = "sonarr_api_key"
+
+def has_sonarr_api_key() -> bool:
+    return has_secret(_SONARR_API_KEY)
+
+def get_sonarr_api_key() -> Optional[str]:
+    return get_secret(_SONARR_API_KEY)
+
+def set_sonarr_api_key(api_key: str) -> bool:
+    return set_secret(_SONARR_API_KEY, api_key)
+
+def delete_sonarr_api_key() -> bool:
+    return delete_secret(_SONARR_API_KEY)

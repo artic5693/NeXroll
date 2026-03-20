@@ -1,4 +1,4 @@
-﻿# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1
 
 # --- Backend runtime stage ---
 FROM python:3.12-slim
@@ -21,8 +21,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     JELLYFIN_URL="" \
     RADARR_URL="" \
     SONARR_URL="" \
+    PUID=99 \
+    PGID=100 \
     TZ=UTC
 
+# Install runtime deps + build deps (removed after pip install)
 RUN apt-get update && \
     apt-get upgrade -y && \
     apt-get install -y --no-install-recommends \
@@ -30,21 +33,24 @@ RUN apt-get update && \
         curl \
         unzip \
         tzdata \
+        gosu \
         build-essential \
         rustc \
         cargo \
         pkg-config && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Deno (required for yt-dlp YouTube extraction)
-RUN curl -fsSL https://deno.land/install.sh | sh && \
-    ln -s /root/.deno/bin/deno /usr/local/bin/deno
+# Install Deno to a shared location (required for yt-dlp YouTube extraction)
+ENV DENO_INSTALL=/usr/local
+RUN curl -fsSL https://deno.land/install.sh | sh
 
 WORKDIR /app/NeXroll
 
-# Install Python deps (use root requirements.txt with all dependencies)
+# Install Python deps, then remove build toolchain to shrink image
 COPY requirements.txt /app/NeXroll/requirements.txt
-RUN pip install --no-cache-dir -r /app/NeXroll/requirements.txt
+RUN pip install --no-cache-dir -r /app/NeXroll/requirements.txt && \
+    apt-get purge -y --auto-remove build-essential rustc cargo pkg-config && \
+    rm -rf /var/lib/apt/lists/* /root/.cargo /root/.rustup /tmp/*
 
 # Copy backend
 COPY NeXroll/backend /app/NeXroll/backend
@@ -61,6 +67,10 @@ COPY docs/lefty-blue-wednesday-main-version-36162-02-38.mp3 /app/docs/lefty-blue
 # Copy pre-built frontend assets (built locally before Docker build)
 COPY NeXroll/frontend/build /app/NeXroll/frontend/build
 
+# Copy entrypoint
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # Prepare persistent data volume
 RUN mkdir -p /data /data/prerolls
 
@@ -72,5 +82,4 @@ EXPOSE 9393
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD curl -fsS http://localhost:${NEXROLL_PORT:-9393}/health || exit 1
 
-# Start Uvicorn
-CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${NEXROLL_PORT:-9393}"]
+ENTRYPOINT ["/entrypoint.sh"]
