@@ -6,22 +6,29 @@ PGID="${PGID:-100}"
 
 echo "NeXroll: Setting up user nexroll with UID=${PUID} GID=${PGID}"
 
-# Create group if it doesn't exist
-if ! getent group nexroll >/dev/null 2>&1; then
+# Get or create group with the requested GID
+GROUP_NAME=$(getent group "$PGID" 2>/dev/null | cut -d: -f1)
+if [ -z "$GROUP_NAME" ]; then
     addgroup --gid "$PGID" nexroll
+    GROUP_NAME="nexroll"
 fi
 
-# Create user if it doesn't exist
-if ! getent passwd nexroll >/dev/null 2>&1; then
-    adduser --disabled-password --gecos "" --uid "$PUID" --ingroup nexroll --home /app nexroll
+# Create user if no user with this UID exists
+if ! getent passwd "$PUID" >/dev/null 2>&1; then
+    adduser --disabled-password --gecos "" --uid "$PUID" --ingroup "$GROUP_NAME" --home /app --no-create-home nexroll
 fi
 
-# Ensure /data is owned by nexroll
+# Get the username for this UID (may not be "nexroll" if it already existed)
+USER_NAME=$(getent passwd "$PUID" 2>/dev/null | cut -d: -f1)
+
+# Ensure /data is owned by the target UID:GID
 chown -R "$PUID:$PGID" /data
 
 # Ensure Deno cache dir exists and is writable
-mkdir -p /home/nexroll/.cache
-chown -R "$PUID:$PGID" /home/nexroll/.cache 2>/dev/null || true
+CACHE_DIR="/tmp/nexroll-cache"
+mkdir -p "$CACHE_DIR"
+chown -R "$PUID:$PGID" "$CACHE_DIR"
+export XDG_CACHE_HOME="$CACHE_DIR"
 
 # Drop privileges and exec uvicorn
-exec gosu nexroll uvicorn backend.main:app --host 0.0.0.0 --port "${NEXROLL_PORT:-9393}"
+exec gosu "$USER_NAME" uvicorn backend.main:app --host 0.0.0.0 --port "${NEXROLL_PORT:-9393}"
