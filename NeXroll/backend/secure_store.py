@@ -667,3 +667,18 @@ def set_sonarr_api_key(api_key: str) -> bool:
 
 def delete_sonarr_api_key() -> bool:
     return delete_secret(_SONARR_API_KEY)
+
+
+_TMDB_API_KEY = "tmdb_api_key"
+
+def has_tmdb_api_key() -> bool:
+    return has_secret(_TMDB_API_KEY)
+
+def get_tmdb_api_key() -> Optional[str]:
+    return get_secret(_TMDB_API_KEY)
+
+def set_tmdb_api_key(api_key: str) -> bool:
+    return set_secret(_TMDB_API_KEY, api_key)
+
+def delete_tmdb_api_key() -> bool:
+    return delete_secret(_TMDB_API_KEY)

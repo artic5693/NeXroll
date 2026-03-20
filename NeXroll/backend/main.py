@@ -63,7 +63,7 @@ def _get_radarr_api_key(setting) -> str | None:
     key = secure_store.get_radarr_api_key()
     if key:
         return key
-    return _get_radarr_api_key(setting) if setting else None
+    return getattr(setting, 'nexup_radarr_api_key', None) if setting else None
 
 
 def _get_sonarr_api_key(setting) -> str | None:
@@ -71,7 +71,15 @@ def _get_sonarr_api_key(setting) -> str | None:
     key = secure_store.get_sonarr_api_key()
     if key:
         return key
-    return _get_sonarr_api_key(setting) if setting else None
+    return getattr(setting, 'nexup_sonarr_api_key', None) if setting else None
+
+
+def _get_tmdb_api_key(setting) -> str | None:
+    """Get TMDB API key from secure store, falling back to DB column."""
+    key = secure_store.get_tmdb_api_key()
+    if key:
+        return key
+    return getattr(setting, 'nexup_tmdb_api_key', None) if setting else None
 
 # Lightweight runtime schema upgrades for older SQLite databases
 def _sqlite_has_column(table: str, column: str) -> bool:
@@ -14578,7 +14586,7 @@ def get_nexup_settings(user: models.User = Depends(require_auth), db: Session = 
         "download_delay": getattr(setting, 'nexup_download_delay', 5),
         "max_concurrent": getattr(setting, 'nexup_max_concurrent', 1),
         "bulk_warning_threshold": getattr(setting, 'nexup_bulk_warning_threshold', 5),
-        "tmdb_api_key": getattr(setting, 'nexup_tmdb_api_key', None),
+        "tmdb_api_key": _get_tmdb_api_key(setting),
         # Sonarr settings
         "sonarr_enabled": getattr(setting, 'nexup_sonarr_enabled', False),
         "sonarr_url": getattr(setting, 'nexup_sonarr_url', None),
@@ -14739,7 +14747,11 @@ def update_nexup_settings(
     if bulk_warning_threshold is not None:
         setting.nexup_bulk_warning_threshold = max(1, min(50, bulk_warning_threshold))  # 1-50 trailers
     if tmdb_api_key is not None:
-        setting.nexup_tmdb_api_key = tmdb_api_key if tmdb_api_key.strip() else None
+        if tmdb_api_key.strip():
+            secure_store.set_tmdb_api_key(tmdb_api_key.strip())
+        else:
+            secure_store.delete_tmdb_api_key()
+        setting.nexup_tmdb_api_key = None
     # Unmonitored content settings
     if include_unmonitored_movies is not None:
         setting.nexup_include_unmonitored_movies = include_unmonitored_movies
@@ -15179,7 +15191,7 @@ async def download_tv_trailer(
     _file_log(f"Sonarr: Found show '{show_info.get('title')}' (TVDB: {show_info.get('tvdbId')}, IMDB: {show_info.get('imdbId')})")
     
     # Get trailer URL from TMDB or IMDB
-    tmdb_api_key = getattr(setting, 'nexup_tmdb_api_key', None)
+    tmdb_api_key = _get_tmdb_api_key(setting)
     fetcher = TVTrailerFetcher(tmdb_api_key=tmdb_api_key)
     _file_log(f"Sonarr: Searching for trailers for '{show_info.get('title')}' S{season_number}")
     trailers = await fetcher.get_season_trailers(
@@ -15792,7 +15804,7 @@ async def sync_sonarr_trailers(db: Session = Depends(get_db)):
     existing_keys = {f"{t.sonarr_series_id}_S{t.season_number}" for t in existing_trailers}
     
     # Find shows that need trailers
-    tmdb_api_key = getattr(setting, 'nexup_tmdb_api_key', None)
+    tmdb_api_key = _get_tmdb_api_key(setting)
     fetcher = TVTrailerFetcher(tmdb_api_key=tmdb_api_key)
     quality = getattr(setting, 'nexup_quality', '1080') or '1080'
     max_duration = getattr(setting, 'nexup_max_trailer_duration', 180) or 0
@@ -20165,6 +20177,7 @@ def diagnostics_bundle(db: Session = Depends(get_db)):
                         _sensitive_values.add(str(val).strip().rstrip("/"))
             # Also include keys from secure_store (may not be in DB)
             for _ss_get in (secure_store.get_radarr_api_key, secure_store.get_sonarr_api_key,
+                            secure_store.get_tmdb_api_key,
                             secure_store.get_plex_token, secure_store.get_jellyfin_api_key,
                             secure_store.get_emby_api_key):
                 try:
@@ -23879,11 +23892,17 @@ def _migrate_api_keys_to_secure_store() -> None:
                 secure_store.set_sonarr_api_key(db_sonarr_key)
                 setting.nexup_sonarr_api_key = None
                 changed = True
+            # TMDB
+            db_tmdb_key = getattr(setting, 'nexup_tmdb_api_key', None)
+            if db_tmdb_key and not secure_store.has_tmdb_api_key():
+                secure_store.set_tmdb_api_key(db_tmdb_key)
+                setting.nexup_tmdb_api_key = None
+                changed = True
             if changed:
                 setting.updated_at = datetime.datetime.utcnow()
                 db.commit()
                 try:
-                    _file_log("Migrated Radarr/Sonarr API keys from DB to secure store")
+                    _file_log("Migrated API keys from DB to secure store")
                 except Exception:
                     pass
         finally:
