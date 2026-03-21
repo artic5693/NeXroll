@@ -13519,9 +13519,10 @@ def get_or_create_thumbnail(category: str, thumb_name: str):
     os.makedirs(cat_thumb_dir, exist_ok=True)
     thumb_path = os.path.join(cat_thumb_dir, thumb_name)
 
-    # If already exists, serve it
+    # If already exists, serve it with cache headers to prevent flicker on React re-renders
     if os.path.exists(thumb_path):
-        return FileResponse(thumb_path, media_type="image/jpeg")
+        return FileResponse(thumb_path, media_type="image/jpeg",
+                            headers={"Cache-Control": "public, max-age=3600, immutable"})
 
     # Derive source video filename by stripping the .jpg suffix
     base, jpg_ext = os.path.splitext(thumb_name)
@@ -13567,7 +13568,8 @@ def get_or_create_thumbnail(category: str, thumb_name: str):
             except Exception:
                 pass
             os.replace(tmp_thumb, thumb_path)
-            return FileResponse(thumb_path, media_type="image/jpeg")
+            return FileResponse(thumb_path, media_type="image/jpeg",
+                                headers={"Cache-Control": "public, max-age=300"})
         except Exception:
             raise HTTPException(status_code=404, detail="Source video not found for thumbnail")
 
@@ -13619,7 +13621,8 @@ def get_or_create_thumbnail(category: str, thumb_name: str):
         except Exception:
             raise HTTPException(status_code=500, detail="Thumbnail generation error")
 
-    return FileResponse(thumb_path, media_type="image/jpeg")
+    return FileResponse(thumb_path, media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=3600, immutable"})
 
 @app.get("/static/prerolls/{category}/{filename}")
 def get_preroll_video(category: str, filename: str, db: Session = Depends(get_db)):

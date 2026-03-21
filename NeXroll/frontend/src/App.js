@@ -7273,7 +7273,7 @@ const DashboardTiles = {
               {preroll.thumbnail && (
                 <img
                   src={apiUrl(`static/${preroll.thumbnail}`)}
-                  alt="thumbnail"
+                  alt=""
                   onError={(e) => {
                     try {
                       const rel = preroll.thumbnail || '';
