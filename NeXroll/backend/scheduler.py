@@ -251,25 +251,31 @@ class Scheduler:
             sonarr_url = getattr(setting, 'nexup_sonarr_url', None)
             sonarr_api_key = getattr(setting, 'nexup_sonarr_api_key', None)
             auto_regen = getattr(setting, 'nexup_coming_soon_list_auto_regen', False)
-            
-            # Resolve _auto_regenerate_coming_soon_list WITHOUT `from backend.main import`
+            auto_regen_recently_added = getattr(setting, 'nexup_recently_added_list_auto_regen', False)
+
+            # Resolve regen functions WITHOUT `from backend.main import`
             # In PyInstaller frozen builds, backend.main is loaded as __main__.
             # Doing `from backend.main import X` triggers a FULL re-execution of
             # the module (including uvicorn.run()), which spawns a second server
             # instance that crashes on port 9393 already-in-use.
             # Instead, pull the function from the already-loaded module via sys.modules.
             regen_func = None
-            if auto_regen:
-                try:
-                    import sys as _sys
-                    _main_mod = _sys.modules.get('backend.main') or _sys.modules.get('__main__')
-                    if _main_mod:
+            regen_recently_added_func = None
+            try:
+                import sys as _sys
+                _main_mod = _sys.modules.get('backend.main') or _sys.modules.get('__main__')
+                if _main_mod:
+                    if auto_regen:
                         regen_func = getattr(_main_mod, '_auto_regenerate_coming_soon_list', None)
-                    if regen_func is None:
-                        _scheduler_log("NeX-Up auto-sync: _auto_regenerate_coming_soon_list not found in loaded modules", level="WARNING")
-                except Exception as e:
-                    _scheduler_log(f"NeX-Up auto-sync: Could not resolve regen function: {e}", level="ERROR")
-            
+                        if regen_func is None:
+                            _scheduler_log("NeX-Up auto-sync: _auto_regenerate_coming_soon_list not found in loaded modules", level="WARNING")
+                    if auto_regen_recently_added:
+                        regen_recently_added_func = getattr(_main_mod, '_auto_regenerate_recently_added_list', None)
+                        if regen_recently_added_func is None:
+                            _scheduler_log("NeX-Up auto-sync: _auto_regenerate_recently_added_list not found in loaded modules", level="WARNING")
+            except Exception as e:
+                _scheduler_log(f"NeX-Up auto-sync: Could not resolve regen functions: {e}", level="ERROR")
+
             # Run ALL async operations (sync + regen) inside a SINGLE asyncio.run()
             # to avoid Windows ProactorEventLoop issues when creating/destroying
             # multiple event loops in the same thread.
@@ -277,7 +283,8 @@ class Scheduler:
                 db, setting,
                 nexup_enabled, radarr_url, radarr_api_key,
                 sonarr_enabled, sonarr_url, sonarr_api_key,
-                regen_func
+                regen_func,
+                regen_recently_added_func
             ))
             
             # Update last sync time
@@ -292,16 +299,16 @@ class Scheduler:
     async def _do_nexup_async_work(self, db, setting,
                                     nexup_enabled, radarr_url, radarr_api_key,
                                     sonarr_enabled, sonarr_url, sonarr_api_key,
-                                    regen_func):
+                                    regen_func,
+                                    regen_recently_added_func=None):
         """
         Run all NeX-Up async operations (Radarr sync, Sonarr sync, Coming Soon
-        regen) inside a SINGLE event loop. This avoids Windows ProactorEventLoop
-        issues that occur when creating/destroying multiple event loops in the
-        same thread — which caused the Coming Soon regeneration to silently hang.
+        regen, Recently Added regen) inside a SINGLE event loop. This avoids
+        Windows ProactorEventLoop issues that occur when creating/destroying
+        multiple event loops in the same thread.
 
-        regen_func: The _auto_regenerate_coming_soon_list coroutine function,
-                    pre-imported by the synchronous caller to avoid triggering
-                    module re-execution inside the running event loop.
+        regen_func: The _auto_regenerate_coming_soon_list coroutine function.
+        regen_recently_added_func: The _auto_regenerate_recently_added_list coroutine function.
         """
         # 1) Radarr sync
         if nexup_enabled and radarr_url and radarr_api_key:
@@ -323,8 +330,6 @@ class Scheduler:
         if regen_func is not None:
             try:
                 _scheduler_log("NeX-Up auto-sync: Regenerating Coming Soon List videos...")
-                # Use a fresh DB session — the original may be stale after
-                # the Radarr/Sonarr syncs consumed it across event-loop boundaries.
                 regen_db = SessionLocal()
                 try:
                     await regen_func(regen_db)
@@ -333,6 +338,21 @@ class Scheduler:
                     regen_db.close()
             except Exception as e:
                 _scheduler_log(f"NeX-Up auto-sync: Coming Soon List regeneration error: {e}", level="ERROR")
+                import traceback
+                _scheduler_log(f"NeX-Up auto-sync: Traceback: {traceback.format_exc()}", level="ERROR")
+
+        # 4) Recently Added List regeneration
+        if regen_recently_added_func is not None:
+            try:
+                _scheduler_log("NeX-Up auto-sync: Regenerating Recently Added List videos...")
+                regen_db = SessionLocal()
+                try:
+                    await regen_recently_added_func(regen_db)
+                    _scheduler_log("NeX-Up auto-sync: Recently Added List regeneration completed")
+                finally:
+                    regen_db.close()
+            except Exception as e:
+                _scheduler_log(f"NeX-Up auto-sync: Recently Added List regeneration error: {e}", level="ERROR")
                 import traceback
                 _scheduler_log(f"NeX-Up auto-sync: Traceback: {traceback.format_exc()}", level="ERROR")
 

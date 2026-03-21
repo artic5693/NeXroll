@@ -513,6 +513,97 @@ class RadarrConnector:
         upcoming.sort(key=lambda x: x['release_date'] or '9999-99-99')
         return upcoming
 
+    async def get_recently_added_movies(self, days_back: int = 30, include_unmonitored: bool = False) -> List[Dict[str, Any]]:
+        """
+        Fetch movies from Radarr that were recently added to the library (hasFile=True).
+        Uses the movieFile.dateAdded field to determine when content was added.
+
+        Args:
+            days_back: How many days back to look for recently added content
+            include_unmonitored: Whether to include unmonitored movies
+        """
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    f"{self.base_url}/api/v3/movie",
+                    headers=self.headers
+                )
+                response.raise_for_status()
+                all_movies = response.json()
+
+            return self.parse_recently_added_from_raw(all_movies, days_back, include_unmonitored)
+
+        except Exception as e:
+            logger.error(f"Error fetching recently added movies from Radarr: {e}")
+            return []
+
+    def parse_recently_added_from_raw(self, all_movies: List[Dict[str, Any]], days_back: int = 30, include_unmonitored: bool = False) -> List[Dict[str, Any]]:
+        """
+        Parse recently added movies from raw Radarr movie data.
+        Returns movies that have been downloaded (hasFile=True) within the last N days.
+        """
+        recently_added = []
+        today = datetime.now().date()
+        cutoff_date = today - timedelta(days=days_back)
+
+        for movie in all_movies:
+            # Only include movies that have been downloaded
+            if not movie.get('hasFile', False):
+                continue
+
+            # Skip unmonitored movies unless requested
+            if not include_unmonitored and not movie.get('monitored', False):
+                continue
+
+            # Get the date the movie file was added
+            added_date = None
+            movie_file = movie.get('movieFile', {})
+            if movie_file:
+                date_added_str = movie_file.get('dateAdded')
+                if date_added_str:
+                    try:
+                        added_date = datetime.fromisoformat(date_added_str.replace('Z', '+00:00')).date()
+                    except (ValueError, TypeError):
+                        pass
+
+            # Fallback to movie.added if movieFile.dateAdded not available
+            if not added_date:
+                added_str = movie.get('added')
+                if added_str:
+                    try:
+                        added_date = datetime.fromisoformat(added_str.replace('Z', '+00:00')).date()
+                    except (ValueError, TypeError):
+                        pass
+
+            if not added_date:
+                continue
+
+            # Only include if added within the lookback window
+            if added_date < cutoff_date:
+                continue
+
+            recently_added.append({
+                'radarr_id': movie.get('id'),
+                'tmdb_id': movie.get('tmdbId'),
+                'imdb_id': movie.get('imdbId'),
+                'title': movie.get('title', 'Unknown'),
+                'year': movie.get('year'),
+                'overview': movie.get('overview', ''),
+                'status': movie.get('status', '').lower(),
+                'added_date': added_date.isoformat(),
+                'poster_url': self._get_poster_url(movie),
+                'fanart_url': self._get_fanart_url(movie),
+                'runtime': movie.get('runtime', 0),
+                'genres': movie.get('genres', []),
+                'ratings': movie.get('ratings', {}),
+                'has_file': True,
+                'monitored': movie.get('monitored', False)
+            })
+
+        # Sort by added date (most recent first)
+        recently_added.sort(key=lambda x: x['added_date'] or '0000-01-01', reverse=True)
+        return recently_added
+
     async def get_movie_by_id(self, radarr_id: int) -> Optional[Dict[str, Any]]:
         """Fetch a specific movie by Radarr ID"""
         try:

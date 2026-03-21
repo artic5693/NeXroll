@@ -14618,7 +14618,23 @@ def get_nexup_settings(user: models.User = Depends(require_auth), db: Session = 
         "coming_soon_available_days": getattr(setting, 'nexup_coming_soon_available_days', 1),
         "coming_soon_max_available_now": getattr(setting, 'nexup_coming_soon_max_available_now', 0),
         # Trailer retention (days before auto-deleting downloaded trailers)
-        "trailer_retention_days": getattr(setting, 'nexup_trailer_retention_days', 7)
+        "trailer_retention_days": getattr(setting, 'nexup_trailer_retention_days', 7),
+        # Recently Added List settings
+        "recently_added_list_auto_regen": getattr(setting, 'nexup_recently_added_list_auto_regen', False),
+        "recently_added_list_auto_regen_layout": getattr(setting, 'nexup_recently_added_list_auto_regen_layout', 'both'),
+        "recently_added_list_layout": getattr(setting, 'nexup_recently_added_list_layout', 'grid'),
+        "recently_added_list_source": getattr(setting, 'nexup_recently_added_list_source', 'both'),
+        "recently_added_list_duration": getattr(setting, 'nexup_recently_added_list_duration', 10),
+        "recently_added_list_max_items": getattr(setting, 'nexup_recently_added_list_max_items', 8),
+        "recently_added_list_bg_color": getattr(setting, 'nexup_recently_added_list_bg_color', '#141428'),
+        "recently_added_list_text_color": getattr(setting, 'nexup_recently_added_list_text_color', '#ffffff'),
+        "recently_added_list_accent_color": getattr(setting, 'nexup_recently_added_list_accent_color', '#00d4ff'),
+        "recently_added_list_server_name": getattr(setting, 'nexup_recently_added_list_server_name', ''),
+        "recently_added_list_include_audio": getattr(setting, 'nexup_recently_added_list_include_audio', False),
+        "recently_added_list_custom_audio_filename": os.path.basename(getattr(setting, 'nexup_recently_added_list_custom_audio_path', '') or '') or None,
+        "recently_added_list_custom_logo_filename": os.path.basename(getattr(setting, 'nexup_recently_added_list_custom_logo_path', '') or '') or None,
+        "recently_added_list_logo_mode": getattr(setting, 'nexup_recently_added_list_logo_mode', 'watermark'),
+        "recently_added_days": getattr(setting, 'nexup_recently_added_days', 30)
     }
 
 @app.put("/nexup/settings")
@@ -14656,6 +14672,19 @@ def update_nexup_settings(
     coming_soon_available_days: Optional[int] = None,
     coming_soon_max_available_now: Optional[int] = None,
     trailer_retention_days: Optional[int] = None,
+    recently_added_list_auto_regen: Optional[bool] = None,
+    recently_added_list_auto_regen_layout: Optional[str] = None,
+    recently_added_list_layout: Optional[str] = None,
+    recently_added_list_source: Optional[str] = None,
+    recently_added_list_duration: Optional[int] = None,
+    recently_added_list_max_items: Optional[int] = None,
+    recently_added_list_bg_color: Optional[str] = None,
+    recently_added_list_text_color: Optional[str] = None,
+    recently_added_list_accent_color: Optional[str] = None,
+    recently_added_list_server_name: Optional[str] = None,
+    recently_added_list_include_audio: Optional[bool] = None,
+    recently_added_list_logo_mode: Optional[str] = None,
+    recently_added_days: Optional[int] = None,
     db: Session = Depends(get_db)
 ):
     """Update NeX-Up settings"""
@@ -14797,10 +14826,39 @@ def update_nexup_settings(
     # Trailer retention days (0 = keep forever, max 365)
     if trailer_retention_days is not None:
         setting.nexup_trailer_retention_days = max(0, min(365, trailer_retention_days))
-    
+    # Recently Added List settings
+    if recently_added_list_auto_regen is not None:
+        setting.nexup_recently_added_list_auto_regen = recently_added_list_auto_regen
+    if recently_added_list_auto_regen_layout is not None:
+        if recently_added_list_auto_regen_layout in ['grid', 'list', 'both']:
+            setting.nexup_recently_added_list_auto_regen_layout = recently_added_list_auto_regen_layout
+    if recently_added_list_layout is not None:
+        setting.nexup_recently_added_list_layout = recently_added_list_layout
+    if recently_added_list_source is not None:
+        setting.nexup_recently_added_list_source = recently_added_list_source
+    if recently_added_list_duration is not None:
+        setting.nexup_recently_added_list_duration = max(5, min(30, recently_added_list_duration))
+    if recently_added_list_max_items is not None:
+        setting.nexup_recently_added_list_max_items = max(4, min(12, recently_added_list_max_items))
+    if recently_added_list_bg_color is not None:
+        setting.nexup_recently_added_list_bg_color = recently_added_list_bg_color
+    if recently_added_list_text_color is not None:
+        setting.nexup_recently_added_list_text_color = recently_added_list_text_color
+    if recently_added_list_accent_color is not None:
+        setting.nexup_recently_added_list_accent_color = recently_added_list_accent_color
+    if recently_added_list_server_name is not None:
+        setting.nexup_recently_added_list_server_name = recently_added_list_server_name
+    if recently_added_list_include_audio is not None:
+        setting.nexup_recently_added_list_include_audio = recently_added_list_include_audio
+    if recently_added_list_logo_mode is not None:
+        if recently_added_list_logo_mode in ['watermark', 'replace']:
+            setting.nexup_recently_added_list_logo_mode = recently_added_list_logo_mode
+    if recently_added_days is not None:
+        setting.nexup_recently_added_days = max(1, min(90, recently_added_days))
+
     setting.updated_at = datetime.datetime.utcnow()
     db.commit()
-    
+
     _file_log(f"NeX-Up settings updated")
     log_event('INFO', 'nexup', 'NeX-Up settings updated', source='update_nexup_settings')
     return {"message": "NeX-Up settings updated", "success": True}
@@ -15958,7 +16016,9 @@ async def sync_sonarr_trailers(db: Session = Depends(get_db)):
     
     # Auto-regenerate Coming Soon List if enabled
     await _auto_regenerate_coming_soon_list(db)
-    
+    # Auto-regenerate Recently Added List if enabled
+    await _auto_regenerate_recently_added_list(db)
+
     return results
 
 # ============================================================================
@@ -17479,7 +17539,9 @@ async def sync_nexup(db: Session = Depends(get_db)):
     
     # Auto-regenerate Coming Soon List if enabled
     await _auto_regenerate_coming_soon_list(db)
-    
+    # Auto-regenerate Recently Added List if enabled
+    await _auto_regenerate_recently_added_list(db)
+
     return results
 
 @app.get("/nexup/storage")
@@ -18443,6 +18505,550 @@ async def preview_coming_soon_list(
     }
 
 
+# =========================================================================
+# RECENTLY ADDED LIST ENDPOINTS
+# =========================================================================
+
+def _register_recently_added_list_to_category(db: Session, output_path: Path, layout: str):
+    """Register a Recently Added List video to the Recently Added Lists system category"""
+    try:
+        category = db.query(models.Category).filter(
+            models.Category.name == "Recently Added Lists"
+        ).first()
+
+        if not category:
+            category = models.Category(
+                name="Recently Added Lists",
+                description="Generated Recently Added list videos showing new content. Managed by NeX-Up.",
+                plex_mode="shuffle",
+                apply_to_plex=False,
+                is_system=True
+            )
+            db.add(category)
+            db.commit()
+            db.refresh(category)
+            _file_log("Created Recently Added Lists system category")
+
+        existing = db.query(models.Preroll).filter(
+            models.Preroll.path == str(output_path)
+        ).first()
+
+        if existing:
+            existing.category_id = category.id
+            db.commit()
+            _file_log(f"Updated existing Recently Added List registration: {output_path.name}")
+        else:
+            display_name = f"Recently Added List ({layout.title()})"
+            new_preroll = models.Preroll(
+                filename=output_path.name,
+                path=str(output_path),
+                display_name=display_name,
+                category_id=category.id,
+                thumbnail="",
+                tags="[]",
+                managed=False
+            )
+            db.add(new_preroll)
+            db.commit()
+            _file_log(f"Registered Recently Added List to category: {output_path.name}")
+    except Exception as e:
+        _file_log(f"Error registering Recently Added List to category: {e}")
+
+
+@app.post("/nexup/preroll/generate-recently-added-list")
+async def generate_recently_added_list(
+    layout: str = "list",
+    source: str = "both",
+    duration: int = 10,
+    max_items: int = 8,
+    bg_color: str = "#141428",
+    text_color: str = "#ffffff",
+    accent_color: str = "#00d4ff",
+    server_name: str = None,
+    include_audio: bool = False,
+    db: Session = Depends(get_db)
+):
+    """
+    Generate a Recently Added List video showing content recently added to the library.
+    Sources items from Radarr/Sonarr APIs (downloaded content only).
+    """
+    from backend.radarr_connector import RadarrConnector
+    from backend.sonarr_connector import SonarrConnector
+
+    _file_log(f"[RECENTLY-ADDED-LIST] Request params: layout={layout}, source={source}, duration={duration}, max_items={max_items}")
+    log_event('INFO', 'nexup', f'Recently Added List generation started (layout={layout}, source={source}, max_items={max_items})',
+             source='generate_recently_added_list', db=db)
+
+    setting = db.query(models.Setting).first()
+    if not setting:
+        raise HTTPException(status_code=400, detail="Settings not configured")
+
+    storage_path = getattr(setting, 'nexup_storage_path', None)
+    if not storage_path:
+        raise HTTPException(status_code=400, detail="NeX-Up storage path not configured")
+
+    if not server_name or not server_name.strip():
+        server_name = setting.plex_server_name or getattr(setting, 'jellyfin_server_name', None) or "Your Server"
+
+    items = []
+    days_back = getattr(setting, 'nexup_recently_added_days', 30) or 30
+
+    # Get recently added movies from Radarr
+    if source in ["movies", "both"]:
+        if setting.nexup_radarr_url and _get_radarr_api_key(setting):
+            try:
+                radarr_connector = RadarrConnector(setting.nexup_radarr_url, _get_radarr_api_key(setting))
+                include_unmonitored = getattr(setting, 'nexup_include_unmonitored_movies', False)
+                movies = await radarr_connector.get_recently_added_movies(days_back, include_unmonitored=include_unmonitored)
+                for movie in movies:
+                    items.append({
+                        'title': movie.get('title', ''),
+                        'release_date': movie.get('added_date', ''),
+                        'poster_url': movie.get('poster_url', ''),
+                        'type': 'movie',
+                        'available_now': False
+                    })
+                _file_log(f"[RECENTLY-ADDED-LIST] Found {len(movies)} recently added movies from Radarr API")
+            except Exception as e:
+                _file_log(f"[RECENTLY-ADDED-LIST] Error fetching from Radarr: {e}")
+        else:
+            _file_log(f"[RECENTLY-ADDED-LIST] Radarr not configured, skipping movies")
+
+    # Get recently added shows from Sonarr
+    if source in ["shows", "both"]:
+        if getattr(setting, 'nexup_sonarr_url', None) and _get_sonarr_api_key(setting):
+            try:
+                sonarr_connector = SonarrConnector(setting.nexup_sonarr_url, _get_sonarr_api_key(setting))
+                include_unmonitored = getattr(setting, 'nexup_include_unmonitored_shows', False)
+                shows = await sonarr_connector.get_recently_added_shows(days_back, include_unmonitored=include_unmonitored)
+                for show in shows:
+                    title = show.get('title', '')
+                    season_number = show.get('season_number', 1)
+                    if season_number and season_number > 1:
+                        title = f"{title} (S{season_number})"
+                    items.append({
+                        'title': title,
+                        'release_date': show.get('added_date', ''),
+                        'poster_url': show.get('poster_url', ''),
+                        'type': 'show',
+                        'available_now': False
+                    })
+                _file_log(f"[RECENTLY-ADDED-LIST] Found {len(shows)} recently added shows from Sonarr API")
+            except Exception as e:
+                _file_log(f"[RECENTLY-ADDED-LIST] Error fetching from Sonarr: {e}")
+        else:
+            _file_log(f"[RECENTLY-ADDED-LIST] Sonarr not configured, skipping shows")
+
+    _file_log(f"[RECENTLY-ADDED-LIST] Total items from APIs: {len(items)}, max_items requested: {max_items}")
+
+    if not items:
+        raise HTTPException(status_code=400, detail="No recently added content found. Make sure Radarr/Sonarr is connected and has recent downloads.")
+
+    # Deduplicate items by title
+    seen_titles = set()
+    unique_items = []
+    for item in items:
+        if item['title'] not in seen_titles:
+            seen_titles.add(item['title'])
+            unique_items.append(item)
+    items = unique_items
+
+    # Sort by added date (most recent first)
+    items.sort(key=lambda x: x.get('release_date') or '0000-01-01', reverse=True)
+
+    # Convert colors from CSS hex to FFmpeg format
+    bg_ffmpeg = bg_color.replace('#', '0x')
+    text_ffmpeg = text_color.replace('#', '0x')
+    accent_ffmpeg = accent_color.replace('#', '0x')
+
+    # Generate the video
+    output_dir = Path(storage_path) / "dynamic_prerolls"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    generator = DynamicPrerollGenerator(str(output_dir))
+
+    if not generator.check_ffmpeg_available():
+        raise HTTPException(status_code=500, detail="FFmpeg not found. Please install FFmpeg to generate this video.")
+
+    output_filename = f"recently_added_{layout}.mp4"
+
+    try:
+        output_path = generator.generate_coming_soon_list(
+            items=items,
+            server_name=server_name,
+            duration=float(duration),
+            output_filename=output_filename,
+            layout=layout,
+            bg_color=bg_ffmpeg,
+            text_color=text_ffmpeg,
+            accent_color=accent_ffmpeg,
+            max_items=max_items,
+            include_audio=include_audio,
+            custom_audio_path=getattr(setting, 'nexup_recently_added_list_custom_audio_path', None),
+            custom_logo_path=getattr(setting, 'nexup_recently_added_list_custom_logo_path', None),
+            logo_mode=getattr(setting, 'nexup_recently_added_list_logo_mode', 'watermark'),
+            header_text="RECENTLY ADDED",
+            date_label="Added"
+        )
+
+        if output_path:
+            _file_log(f"[RECENTLY-ADDED-LIST] Generated: {output_path}")
+            log_event('INFO', 'nexup', f'Recently Added List generated successfully ({layout} layout, {min(len(items), max_items)} items)',
+                     source='generate_recently_added_list', details={'layout': layout, 'path': str(output_path), 'items': min(len(items), max_items)}, db=db)
+
+            if server_name and server_name.strip():
+                setting.nexup_dynamic_preroll_server_name = server_name.strip()
+                db.commit()
+
+            _register_recently_added_list_to_category(db, Path(output_path), layout)
+
+            return {
+                "success": True,
+                "path": str(output_path),
+                "layout": layout,
+                "items_count": min(len(items), max_items),
+                "total_eligible": len(items),
+                "max_items_setting": max_items,
+                "source": source,
+                "duration": duration,
+                "message": f"Generated Recently Added list with {min(len(items), max_items)} items (of {len(items)} eligible)"
+            }
+        else:
+            log_event('ERROR', 'nexup', 'Recently Added List generation returned no output',
+                     source='generate_recently_added_list', details={'layout': layout}, db=db)
+            raise HTTPException(status_code=500, detail="Failed to generate Recently Added list video")
+    except HTTPException:
+        raise
+    except Exception as e:
+        _file_log(f"Error generating Recently Added list: {e}")
+        log_event('ERROR', 'nexup', f'Recently Added List generation failed: {e}',
+                 source='generate_recently_added_list', details={'layout': layout, 'error': str(e)}, db=db)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/nexup/preroll/recently-added-list/preview")
+async def preview_recently_added_list(
+    source: str = "both",
+    max_items: int = 8,
+    db: Session = Depends(get_db)
+):
+    """
+    Preview what items would appear in a Recently Added List video.
+    Sources items from Radarr/Sonarr APIs (recently downloaded content).
+    """
+    from backend.radarr_connector import RadarrConnector
+    from backend.sonarr_connector import SonarrConnector
+
+    setting = db.query(models.Setting).first()
+    if not setting:
+        return {"items": [], "error": "Settings not configured"}
+
+    items = []
+    days_back = getattr(setting, 'nexup_recently_added_days', 30) or 30
+
+    # Get recently added movies from Radarr
+    if source in ["movies", "both"]:
+        if setting.nexup_radarr_url and _get_radarr_api_key(setting):
+            try:
+                radarr_connector = RadarrConnector(setting.nexup_radarr_url, _get_radarr_api_key(setting))
+                include_unmonitored = getattr(setting, 'nexup_include_unmonitored_movies', False)
+                movies = await radarr_connector.get_recently_added_movies(days_back, include_unmonitored=include_unmonitored)
+                for movie in movies:
+                    items.append({
+                        'title': movie.get('title', ''),
+                        'added_date': movie.get('added_date', ''),
+                        'poster_url': movie.get('poster_url', ''),
+                        'type': 'movie'
+                    })
+            except Exception as e:
+                _file_log(f"[RECENTLY-ADDED-PREVIEW] Error fetching from Radarr: {e}")
+
+    # Get recently added shows from Sonarr
+    if source in ["shows", "both"]:
+        if getattr(setting, 'nexup_sonarr_url', None) and _get_sonarr_api_key(setting):
+            try:
+                sonarr_connector = SonarrConnector(setting.nexup_sonarr_url, _get_sonarr_api_key(setting))
+                include_unmonitored = getattr(setting, 'nexup_include_unmonitored_shows', False)
+                shows = await sonarr_connector.get_recently_added_shows(days_back, include_unmonitored=include_unmonitored)
+                for show in shows:
+                    title = show.get('title', '')
+                    season_number = show.get('season_number', 1)
+                    if season_number and season_number > 1:
+                        title = f"{title} (S{season_number})"
+                    items.append({
+                        'title': title,
+                        'added_date': show.get('added_date', ''),
+                        'poster_url': show.get('poster_url', ''),
+                        'type': 'show'
+                    })
+            except Exception as e:
+                _file_log(f"[RECENTLY-ADDED-PREVIEW] Error fetching from Sonarr: {e}")
+
+    # Deduplicate by title
+    seen_titles = set()
+    unique_items = []
+    for item in items:
+        if item['title'] not in seen_titles:
+            seen_titles.add(item['title'])
+            unique_items.append(item)
+    items = unique_items
+
+    # Sort by added date (most recent first)
+    items.sort(key=lambda x: x.get('added_date') or '0000-01-01', reverse=True)
+
+    movie_count = len([i for i in items if i['type'] == 'movie'])
+    show_count = len([i for i in items if i['type'] == 'show'])
+
+    return {
+        "items": items[:max_items],
+        "total_available": len(items),
+        "showing": min(len(items), max_items),
+        "movie_count": movie_count,
+        "show_count": show_count,
+        "days_back": days_back,
+        "has_content": len(items) > 0
+    }
+
+
+@app.post("/nexup/recently-added-list/upload-audio")
+async def upload_recently_added_audio(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    """Upload a custom audio file for Recently Added List videos."""
+    setting = db.query(models.Setting).first()
+    if not setting:
+        raise HTTPException(status_code=400, detail="Settings not configured")
+
+    storage_path = getattr(setting, 'nexup_storage_path', None)
+    if not storage_path:
+        raise HTTPException(status_code=400, detail="NeX-Up storage path not configured")
+
+    if not file.filename.lower().endswith(('.mp3', '.wav', '.ogg', '.m4a', '.aac')):
+        raise HTTPException(status_code=400, detail="Invalid audio format. Supported: mp3, wav, ogg, m4a, aac")
+
+    audio_path = Path(storage_path) / f"recently_added_custom_audio{Path(file.filename).suffix}"
+    content = await file.read()
+    audio_path.write_bytes(content)
+
+    setting.nexup_recently_added_list_custom_audio_path = str(audio_path)
+    db.commit()
+
+    return {"success": True, "filename": file.filename, "path": str(audio_path)}
+
+
+@app.delete("/nexup/recently-added-list/upload-audio")
+async def delete_recently_added_audio(db: Session = Depends(get_db)):
+    """Remove custom audio file for Recently Added List videos."""
+    setting = db.query(models.Setting).first()
+    if setting and getattr(setting, 'nexup_recently_added_list_custom_audio_path', None):
+        audio_path = Path(setting.nexup_recently_added_list_custom_audio_path)
+        if audio_path.exists():
+            audio_path.unlink()
+        setting.nexup_recently_added_list_custom_audio_path = None
+        db.commit()
+    return {"success": True}
+
+
+@app.post("/nexup/recently-added-list/upload-logo")
+async def upload_recently_added_logo(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    """Upload a custom logo image for Recently Added List videos."""
+    setting = db.query(models.Setting).first()
+    if not setting:
+        raise HTTPException(status_code=400, detail="Settings not configured")
+
+    storage_path = getattr(setting, 'nexup_storage_path', None)
+    if not storage_path:
+        raise HTTPException(status_code=400, detail="NeX-Up storage path not configured")
+
+    if not file.filename.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.svg')):
+        raise HTTPException(status_code=400, detail="Invalid image format. Supported: png, jpg, jpeg, webp, svg")
+
+    logo_path = Path(storage_path) / f"recently_added_custom_logo{Path(file.filename).suffix}"
+    content = await file.read()
+    logo_path.write_bytes(content)
+
+    setting.nexup_recently_added_list_custom_logo_path = str(logo_path)
+    db.commit()
+
+    return {"success": True, "filename": file.filename, "path": str(logo_path)}
+
+
+@app.delete("/nexup/recently-added-list/upload-logo")
+async def delete_recently_added_logo(db: Session = Depends(get_db)):
+    """Remove custom logo image for Recently Added List videos."""
+    setting = db.query(models.Setting).first()
+    if setting and getattr(setting, 'nexup_recently_added_list_custom_logo_path', None):
+        logo_path = Path(setting.nexup_recently_added_list_custom_logo_path)
+        if logo_path.exists():
+            logo_path.unlink()
+        setting.nexup_recently_added_list_custom_logo_path = None
+        db.commit()
+    return {"success": True}
+
+
+async def _auto_regenerate_recently_added_list(db: Session):
+    """Auto-regenerate Recently Added List if enabled in settings."""
+    try:
+        setting = db.query(models.Setting).first()
+        if not setting:
+            return
+
+        auto_regen = getattr(setting, 'nexup_recently_added_list_auto_regen', False)
+        if not auto_regen:
+            _file_log("Recently Added List auto-regen: Disabled, skipping")
+            return
+
+        _file_log("Recently Added List auto-regen: Starting automatic regeneration")
+        log_event('INFO', 'nexup', 'Recently Added List auto-regeneration started', source='auto_regen_recently_added', db=db)
+
+        auto_regen_layout = getattr(setting, 'nexup_recently_added_list_auto_regen_layout', 'both')
+        source = getattr(setting, 'nexup_recently_added_list_source', 'both')
+        duration = getattr(setting, 'nexup_recently_added_list_duration', 10)
+        max_items = getattr(setting, 'nexup_recently_added_list_max_items', 8)
+        bg_color = getattr(setting, 'nexup_recently_added_list_bg_color', '#141428')
+        text_color = getattr(setting, 'nexup_recently_added_list_text_color', '#ffffff')
+        accent_color = getattr(setting, 'nexup_recently_added_list_accent_color', '#00d4ff')
+        server_name = getattr(setting, 'nexup_recently_added_list_server_name', '')
+        include_audio = getattr(setting, 'nexup_recently_added_list_include_audio', False)
+        custom_audio_path = getattr(setting, 'nexup_recently_added_list_custom_audio_path', None)
+        custom_logo_path = getattr(setting, 'nexup_recently_added_list_custom_logo_path', None)
+        logo_mode = getattr(setting, 'nexup_recently_added_list_logo_mode', 'watermark')
+        storage_path = getattr(setting, 'nexup_storage_path', None)
+        days_back = getattr(setting, 'nexup_recently_added_days', 30) or 30
+
+        if not storage_path:
+            _file_log("Recently Added List auto-regen: No storage path configured")
+            return
+
+        if not server_name or not server_name.strip():
+            server_name = setting.plex_server_name or getattr(setting, 'jellyfin_server_name', None) or "Your Server"
+
+        from backend.radarr_connector import RadarrConnector
+        from backend.sonarr_connector import SonarrConnector
+
+        items = []
+
+        if source in ["movies", "both"]:
+            if setting.nexup_radarr_url and _get_radarr_api_key(setting):
+                try:
+                    radarr_connector = RadarrConnector(setting.nexup_radarr_url, _get_radarr_api_key(setting))
+                    include_unmonitored = getattr(setting, 'nexup_include_unmonitored_movies', False)
+                    movies = await radarr_connector.get_recently_added_movies(days_back, include_unmonitored=include_unmonitored)
+                    for movie in movies:
+                        items.append({
+                            'title': movie.get('title', ''),
+                            'release_date': movie.get('added_date', ''),
+                            'poster_url': movie.get('poster_url', ''),
+                            'type': 'movie',
+                            'available_now': False
+                        })
+                    _file_log(f"Recently Added List auto-regen: Found {len(movies)} recently added movies from Radarr")
+                except Exception as e:
+                    _file_log(f"Recently Added List auto-regen: Error fetching from Radarr: {e}")
+
+        if source in ["shows", "both"]:
+            if getattr(setting, 'nexup_sonarr_url', None) and _get_sonarr_api_key(setting):
+                try:
+                    sonarr_connector = SonarrConnector(setting.nexup_sonarr_url, _get_sonarr_api_key(setting))
+                    include_unmonitored = getattr(setting, 'nexup_include_unmonitored_shows', False)
+                    shows = await sonarr_connector.get_recently_added_shows(days_back, include_unmonitored=include_unmonitored)
+                    for show in shows:
+                        title = show.get('title', '')
+                        season_number = show.get('season_number', 1)
+                        if season_number and season_number > 1:
+                            title = f"{title} (S{season_number})"
+                        items.append({
+                            'title': title,
+                            'release_date': show.get('added_date', ''),
+                            'poster_url': show.get('poster_url', ''),
+                            'type': 'show',
+                            'available_now': False
+                        })
+                    _file_log(f"Recently Added List auto-regen: Found {len(shows)} recently added shows from Sonarr")
+                except Exception as e:
+                    _file_log(f"Recently Added List auto-regen: Error fetching from Sonarr: {e}")
+
+        if not items:
+            _file_log("Recently Added List auto-regen: No items to display")
+            return
+
+        # Deduplicate
+        seen_titles = set()
+        unique_items = []
+        for item in items:
+            if item['title'] not in seen_titles:
+                seen_titles.add(item['title'])
+                unique_items.append(item)
+        items = unique_items
+
+        # Sort by added date (most recent first)
+        items.sort(key=lambda x: x.get('release_date') or '0000-01-01', reverse=True)
+        items = items[:max_items]
+
+        bg_ffmpeg = bg_color.replace('#', '0x')
+        text_ffmpeg = text_color.replace('#', '0x')
+        accent_ffmpeg = accent_color.replace('#', '0x')
+
+        output_dir = Path(storage_path) / "dynamic_prerolls"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        generator = DynamicPrerollGenerator(str(output_dir))
+
+        if not generator.check_ffmpeg_available():
+            _file_log("Recently Added List auto-regen: FFmpeg not available", level="WARNING")
+            return
+
+        layouts_to_generate = ['grid', 'list'] if auto_regen_layout == 'both' else [auto_regen_layout]
+        _file_log(f"Recently Added List auto-regen: Generating layouts: {layouts_to_generate}")
+
+        success_count = 0
+        for layout in layouts_to_generate:
+            output_filename = f"recently_added_{layout}.mp4"
+            output_path = generator.generate_coming_soon_list(
+                items=items,
+                server_name=server_name,
+                layout=layout,
+                duration=duration,
+                output_filename=output_filename,
+                bg_color=bg_ffmpeg,
+                text_color=text_ffmpeg,
+                accent_color=accent_ffmpeg,
+                max_items=max_items,
+                include_audio=include_audio,
+                custom_audio_path=custom_audio_path,
+                custom_logo_path=custom_logo_path,
+                logo_mode=logo_mode,
+                header_text="RECENTLY ADDED",
+                date_label="Added"
+            )
+
+            if output_path:
+                _file_log(f"Recently Added List auto-regen: Success - {output_path}")
+                success_count += 1
+            else:
+                _file_log(f"Recently Added List auto-regen: Failed to generate {layout} layout")
+
+        if success_count == len(layouts_to_generate):
+            _file_log(f"Recently Added List auto-regen: All {success_count} layout(s) generated successfully")
+            log_event('INFO', 'nexup', f'Recently Added List auto-regen completed ({success_count} layout(s))',
+                     source='auto_regen_recently_added', details={'layouts': layouts_to_generate, 'success': success_count}, db=db)
+        elif success_count > 0:
+            log_event('WARNING', 'nexup', f'Recently Added List auto-regen partial: {success_count}/{len(layouts_to_generate)} layouts',
+                     source='auto_regen_recently_added', details={'layouts': layouts_to_generate, 'success': success_count}, db=db)
+        else:
+            log_event('ERROR', 'nexup', 'Recently Added List auto-regen failed: no layouts generated',
+                     source='auto_regen_recently_added', details={'layouts': layouts_to_generate}, db=db)
+
+    except Exception as e:
+        _file_log(f"Recently Added List auto-regen: Error - {str(e)}", level="ERROR")
+        log_event('ERROR', 'nexup', f'Recently Added List auto-regen error: {e}',
+                 source='auto_regen_recently_added', details={'error': str(e)}, db=db)
+
+
 @app.post("/nexup/preroll/generate-from-preview")
 async def generate_preroll_from_preview(
     image_data: str = Body(..., description="Base64 encoded PNG image from CSS preview"),
@@ -18606,25 +19212,22 @@ def list_generated_prerolls(db: Session = Depends(get_db)):
     setting = db.query(models.Setting).first()
     
     if not setting:
-        return {"prerolls": [], "coming_soon_lists": []}
-    
+        return {"prerolls": [], "coming_soon_lists": [], "recently_added_lists": []}
+
     storage_path = getattr(setting, 'nexup_storage_path', None)
     if not storage_path:
-        return {"prerolls": [], "coming_soon_lists": []}
-    
+        return {"prerolls": [], "coming_soon_lists": [], "recently_added_lists": []}
+
     output_dir = Path(storage_path) / "dynamic_prerolls"
     prerolls = []
     coming_soon_lists = []
-    
+    recently_added_lists = []
+
     if output_dir.exists():
         # List dynamic prerolls (*_preroll.mp4)
         for file in output_dir.glob("*_preroll.mp4"):
-            # Extract template name from filename (e.g., "coming_soon_cinematic_preroll.mp4" -> "coming_soon_cinematic")
             template_id = file.stem.replace("_preroll", "")
-            
-            # Get file stats
             stat = file.stat()
-            
             prerolls.append({
                 "filename": file.name,
                 "template_id": template_id,
@@ -18632,18 +19235,13 @@ def list_generated_prerolls(db: Session = Depends(get_db)):
                 "size_bytes": stat.st_size,
                 "created_at": stat.st_mtime
             })
-        
+
         # List coming soon list videos (coming_soon_grid.mp4, coming_soon_list.mp4)
         for file in output_dir.glob("coming_soon_*.mp4"):
-            # Skip general dynamic prerolls that end with _preroll
             if file.stem.endswith('_preroll'):
                 continue
-            # Extract layout type from filename (e.g., "coming_soon_grid.mp4" -> "grid")
             layout_type = file.stem.replace("coming_soon_", "")
-            
-            # Get file stats
             stat = file.stat()
-            
             coming_soon_lists.append({
                 "filename": file.name,
                 "layout": layout_type,
@@ -18651,12 +19249,26 @@ def list_generated_prerolls(db: Session = Depends(get_db)):
                 "size_bytes": stat.st_size,
                 "created_at": stat.st_mtime
             })
-    
-    # Sort by creation time (newest first)
+
+        # List recently added list videos (recently_added_grid.mp4, recently_added_list.mp4)
+        for file in output_dir.glob("recently_added_*.mp4"):
+            if file.stem.endswith('_preroll'):
+                continue
+            layout_type = file.stem.replace("recently_added_", "")
+            stat = file.stat()
+            recently_added_lists.append({
+                "filename": file.name,
+                "layout": layout_type,
+                "path": str(file),
+                "size_bytes": stat.st_size,
+                "created_at": stat.st_mtime
+            })
+
     prerolls.sort(key=lambda x: x["created_at"], reverse=True)
     coming_soon_lists.sort(key=lambda x: x["created_at"], reverse=True)
-    
-    return {"prerolls": prerolls, "coming_soon_lists": coming_soon_lists}
+    recently_added_lists.sort(key=lambda x: x["created_at"], reverse=True)
+
+    return {"prerolls": prerolls, "coming_soon_lists": coming_soon_lists, "recently_added_lists": recently_added_lists}
 
 @app.delete("/nexup/preroll/{filename}")
 def delete_specific_preroll(filename: str, db: Session = Depends(get_db)):

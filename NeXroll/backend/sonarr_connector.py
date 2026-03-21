@@ -334,6 +334,112 @@ class SonarrConnector:
             return []
 
 
+    async def get_recently_added_shows(self, days_back: int = 30, include_unmonitored: bool = False) -> List[Dict[str, Any]]:
+        """
+        Fetch TV shows/seasons that were recently added to the library.
+        Uses the history API with downloadFolderImported events to find recently grabbed content,
+        then cross-references with series data for poster/metadata.
+        """
+        try:
+            all_series = await self.get_all_series()
+
+            # Build lookup by series ID
+            series_map = {s.get('id'): s for s in all_series}
+
+            today = datetime.now().date()
+            cutoff_date = today - timedelta(days=days_back)
+
+            # Fetch history — grab/import events from the last N days
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    f"{self.base_url}/api/v3/history",
+                    headers=self.headers,
+                    params={
+                        'pageSize': 500,
+                        'page': 1,
+                        'sortKey': 'date',
+                        'sortDirection': 'descending',
+                        'eventType': 'downloadFolderImported',
+                        'includeSeries': 'true',
+                        'includeEpisode': 'true'
+                    }
+                )
+                response.raise_for_status()
+                history_data = response.json()
+
+            records = history_data.get('records', [])
+            seen_series = {}  # Track unique series (most recent addition wins)
+
+            for record in records:
+                # Parse the date
+                date_str = record.get('date')
+                if not date_str:
+                    continue
+                try:
+                    added_date = datetime.fromisoformat(date_str.replace('Z', '+00:00')).date()
+                except (ValueError, TypeError):
+                    continue
+
+                if added_date < cutoff_date:
+                    continue
+
+                series_id = record.get('seriesId')
+                if not series_id:
+                    continue
+
+                series = record.get('series') or series_map.get(series_id, {})
+                if not series:
+                    continue
+
+                # Skip unmonitored series unless requested
+                if not include_unmonitored and not series.get('monitored', False):
+                    continue
+
+                # Deduplicate — keep the most recent addition per series
+                if series_id in seen_series:
+                    continue
+
+                # Get series images
+                poster_url = None
+                fanart_url = None
+                for image in series.get('images', []):
+                    if image.get('coverType') == 'poster':
+                        poster_url = image.get('remoteUrl') or image.get('url')
+                    elif image.get('coverType') == 'fanart':
+                        fanart_url = image.get('remoteUrl') or image.get('url')
+
+                episode = record.get('episode', {})
+                season_number = episode.get('seasonNumber', 1)
+
+                seen_series[series_id] = {
+                    'sonarr_id': series_id,
+                    'tvdb_id': series.get('tvdbId'),
+                    'imdb_id': series.get('imdbId'),
+                    'title': series.get('title', 'Unknown'),
+                    'year': series.get('year'),
+                    'overview': series.get('overview', ''),
+                    'status': series.get('status', ''),
+                    'network': series.get('network', ''),
+                    'added_date': added_date.isoformat(),
+                    'season_number': season_number,
+                    'poster_url': poster_url,
+                    'fanart_url': fanart_url,
+                    'runtime': series.get('runtime', 0),
+                    'genres': series.get('genres', []),
+                    'has_file': True,
+                    'monitored': series.get('monitored', False)
+                }
+
+            # Sort by added date (most recent first)
+            result = list(seen_series.values())
+            result.sort(key=lambda x: x['added_date'] or '0000-01-01', reverse=True)
+            return result
+
+        except Exception as e:
+            logger.error(f"Error fetching recently added shows from Sonarr: {e}")
+            return []
+
+
 class TVTrailerFetcher:
     """Fetches trailer URLs from TMDB and IMDB for TV shows"""
     

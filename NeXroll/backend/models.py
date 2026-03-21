@@ -312,7 +312,24 @@ class Setting(Base):
     nexup_coming_soon_available_days = Column(Integer, default=1)  # Days to show "Available Now!" after download before auto-removing
     nexup_coming_soon_max_available_now = Column(Integer, default=0)  # Max "Available Now!" items to show (0 = no limit)
     nexup_trailer_retention_days = Column(Integer, default=7)  # Days to retain downloaded trailers before auto-deleting (0 = keep forever)
-    
+
+    # Recently Added List Settings
+    nexup_recently_added_list_auto_regen = Column(Boolean, default=False)  # Auto-regenerate Recently Added List after sync
+    nexup_recently_added_list_layout = Column(String, default='grid')  # Layout: 'grid', 'list', or 'both'
+    nexup_recently_added_list_source = Column(String, default='both')  # Source: 'movies', 'shows', or 'both'
+    nexup_recently_added_list_duration = Column(Integer, default=10)  # Duration in seconds
+    nexup_recently_added_list_max_items = Column(Integer, default=8)  # Max items to show
+    nexup_recently_added_list_bg_color = Column(String, default='#141428')  # Background color
+    nexup_recently_added_list_text_color = Column(String, default='#ffffff')  # Text color
+    nexup_recently_added_list_accent_color = Column(String, default='#00d4ff')  # Accent color
+    nexup_recently_added_list_server_name = Column(String, default='')  # Server name to display
+    nexup_recently_added_list_auto_regen_layout = Column(String, default='both')  # Auto-regen layout: 'grid', 'list', or 'both'
+    nexup_recently_added_list_include_audio = Column(Boolean, default=False)  # Include background music
+    nexup_recently_added_list_custom_audio_path = Column(String, nullable=True)  # Custom audio file path
+    nexup_recently_added_list_custom_logo_path = Column(String, nullable=True)  # Custom logo image path
+    nexup_recently_added_list_logo_mode = Column(String, default='watermark')  # 'watermark' or 'replace'
+    nexup_recently_added_days = Column(Integer, default=30)  # How many days back to look for recently added content
+
     # Authentication Settings (Optional - for PWA/remote access)
     auth_enabled = Column(Boolean, default=False)  # Master toggle - auth is OPTIONAL
     auth_session_timeout_hours = Column(Integer, default=24)  # Session duration in hours

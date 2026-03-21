@@ -772,7 +772,7 @@ const [applyingToServer, setApplyingToServer] = useState(false);
   const [communityIndexProgress, setCommunityIndexProgress] = useState(null); // { status: 'Building...', phase: 'init'|'done'|'error' }
   const [nexupSyncProgress, setNexupSyncProgress] = useState(null); // { status: 'Syncing...', phase: 'init'|'done'|'error' }
   const [updateCheckProgress, setUpdateCheckProgress] = useState(null); // { status: 'Checking...', phase: 'init'|'done'|'error' }
-  const [generatorTab, setGeneratorTab] = useState('dynamic'); // 'dynamic' or 'coming-soon'
+  const [generatorTab, setGeneratorTab] = useState('dynamic'); // 'dynamic', 'coming-soon', or 'recently-added'
   // Dynamic Preroll Generator State
   const [dynamicPrerollSettings, setDynamicPrerollSettings] = useState({
     template: 'coming_soon',
@@ -814,7 +814,32 @@ const [applyingToServer, setApplyingToServer] = useState(false);
   const [comingSoonListsCollapsed, setComingSoonListsCollapsed] = useState(false);
   const [previewingComingSoonList, setPreviewingComingSoonList] = useState(null);
   const comingSoonListSettingsLoadedRef = React.useRef(false);  // Track if initial load done
-  
+
+  // Recently Added List state
+  const [recentlyAddedListSettings, setRecentlyAddedListSettings] = useState({
+    layout: 'grid',
+    source: 'both',
+    duration: 10,
+    maxItems: 8,
+    bgColor: '#141428',
+    textColor: '#ffffff',
+    accentColor: '#00d4ff',
+    serverName: '',
+    autoRegen: false,
+    autoRegenLayout: 'both',
+    includeAudio: false,
+    customAudioFilename: null,
+    customLogoFilename: null,
+    logoMode: 'watermark',
+    daysBack: 30
+  });
+  const [recentlyAddedListGenerating, setRecentlyAddedListGenerating] = useState(false);
+  const [generatedRecentlyAddedLists, setGeneratedRecentlyAddedLists] = useState([]);
+  const [recentlyAddedListsCollapsed, setRecentlyAddedListsCollapsed] = useState(false);
+  const recentlyAddedListSettingsLoadedRef = React.useRef(false);
+  const [recentlyAddedItems, setRecentlyAddedItems] = useState([]);
+  const [recentlyAddedLoading, setRecentlyAddedLoading] = useState(false);
+
   // API Keys Management State
   const [apiKeys, setApiKeys] = useState([]);
   const [apiKeysLoading, setApiKeysLoading] = useState(false);
@@ -15727,6 +15752,27 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
         }));
         // Mark settings as loaded to enable auto-save
         setTimeout(() => { comingSoonListSettingsLoadedRef.current = true; }, 100);
+
+        // Also populate Recently Added List settings from the loaded data
+        setRecentlyAddedListSettings(prev => ({
+          ...prev,
+          layout: data.recently_added_list_layout || 'grid',
+          source: data.recently_added_list_source || 'both',
+          duration: data.recently_added_list_duration || 10,
+          maxItems: data.recently_added_list_max_items || 8,
+          bgColor: data.recently_added_list_bg_color || '#141428',
+          textColor: data.recently_added_list_text_color || '#ffffff',
+          accentColor: data.recently_added_list_accent_color || '#00d4ff',
+          serverName: data.recently_added_list_server_name || '',
+          autoRegen: data.recently_added_list_auto_regen || false,
+          autoRegenLayout: data.recently_added_list_auto_regen_layout || 'both',
+          includeAudio: data.recently_added_list_include_audio || false,
+          customAudioFilename: data.recently_added_list_custom_audio_filename || null,
+          customLogoFilename: data.recently_added_list_custom_logo_filename || null,
+          logoMode: data.recently_added_list_logo_mode || 'watermark',
+          daysBack: data.recently_added_days || 30
+        }));
+        setTimeout(() => { recentlyAddedListSettingsLoadedRef.current = true; }, 100);
       }
     } catch (err) {
       console.error('Failed to load NeX-Up settings:', err);
@@ -15769,6 +15815,42 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [comingSoonListSettings]);
+
+  // Save Recently Added List settings to backend (for persistence)
+  const saveRecentlyAddedListSettings = async (settings) => {
+    try {
+      const params = new URLSearchParams();
+      if (settings.layout !== undefined) params.append('recently_added_list_layout', settings.layout);
+      if (settings.source !== undefined) params.append('recently_added_list_source', settings.source);
+      if (settings.duration !== undefined) params.append('recently_added_list_duration', settings.duration.toString());
+      if (settings.maxItems !== undefined) params.append('recently_added_list_max_items', settings.maxItems.toString());
+      if (settings.bgColor !== undefined) params.append('recently_added_list_bg_color', settings.bgColor);
+      if (settings.textColor !== undefined) params.append('recently_added_list_text_color', settings.textColor);
+      if (settings.accentColor !== undefined) params.append('recently_added_list_accent_color', settings.accentColor);
+      if (settings.serverName !== undefined) params.append('recently_added_list_server_name', settings.serverName);
+      if (settings.autoRegen !== undefined) params.append('recently_added_list_auto_regen', settings.autoRegen.toString());
+      if (settings.autoRegenLayout !== undefined) params.append('recently_added_list_auto_regen_layout', settings.autoRegenLayout);
+      if (settings.includeAudio !== undefined) params.append('recently_added_list_include_audio', settings.includeAudio.toString());
+      if (settings.logoMode !== undefined) params.append('recently_added_list_logo_mode', settings.logoMode);
+      if (settings.daysBack !== undefined) params.append('recently_added_days', settings.daysBack.toString());
+
+      await fetch(apiUrl('/nexup/settings?' + params.toString()), { method: 'PUT' });
+    } catch (err) {
+      console.error('Failed to save Recently Added List settings:', err);
+    }
+  };
+
+  // Auto-save Recently Added List settings when they change (with debounce)
+  React.useEffect(() => {
+    if (!recentlyAddedListSettingsLoadedRef.current) return;
+
+    const timer = setTimeout(() => {
+      saveRecentlyAddedListSettings(recentlyAddedListSettings);
+    }, 500);
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recentlyAddedListSettings]);
 
   const loadNexupTrailers = async () => {
     try {
@@ -16536,6 +16618,7 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
     loadDynamicPrerollSettings();
     loadGeneratedPrerolls();
     loadGeneratedComingSoonLists();
+    loadGeneratedRecentlyAddedLists();
     loadYoutubeStatus();
   }, []);
 
@@ -16833,6 +16916,80 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
       if (res.ok) {
         showAlert('Coming Soon List deleted', 'success');
         loadGeneratedComingSoonLists();
+        loadGeneratedPrerolls();
+      } else {
+        const err = await res.json();
+        showAlert(err.detail || 'Failed to delete', 'error');
+      }
+    } catch (err) {
+      showAlert('Error deleting: ' + (err?.message || err), 'error');
+    }
+  };
+
+  // Recently Added List functions
+  const loadGeneratedRecentlyAddedLists = async () => {
+    try {
+      const res = await fetch(apiUrl('/nexup/preroll/list'));
+      if (res.ok) {
+        const data = await res.json();
+        const recentlyAddedLists = (data.recently_added_lists || []);
+        setGeneratedRecentlyAddedLists(recentlyAddedLists);
+      }
+    } catch (err) {
+      console.error('Failed to load Recently Added Lists:', err);
+    }
+  };
+
+  const handleGenerateRecentlyAddedList = async () => {
+    setRecentlyAddedListGenerating(true);
+    try {
+      const params = new URLSearchParams({
+        layout: recentlyAddedListSettings.layout,
+        source: recentlyAddedListSettings.source,
+        duration: recentlyAddedListSettings.duration.toString(),
+        max_items: recentlyAddedListSettings.maxItems.toString(),
+        bg_color: recentlyAddedListSettings.bgColor,
+        text_color: recentlyAddedListSettings.textColor,
+        accent_color: recentlyAddedListSettings.accentColor
+      });
+      if (recentlyAddedListSettings.serverName.trim()) {
+        params.append('server_name', recentlyAddedListSettings.serverName.trim());
+      }
+      if (recentlyAddedListSettings.includeAudio) {
+        params.append('include_audio', 'true');
+      }
+
+      const res = await fetch(apiUrl(`/nexup/preroll/generate-recently-added-list?${params}`), {
+        method: 'POST'
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        showAlert(`Recently Added List generated with ${data.items_count} items!`, 'success');
+        loadGeneratedRecentlyAddedLists();
+        loadGeneratedPrerolls();
+      } else {
+        const err = await res.json();
+        showAlert(err.detail || 'Failed to generate Recently Added List', 'error');
+      }
+    } catch (err) {
+      showAlert('Error generating Recently Added List: ' + (err?.message || err), 'error');
+    } finally {
+      setRecentlyAddedListGenerating(false);
+    }
+  };
+
+  const handleDeleteRecentlyAddedList = async (filename) => {
+    if (confirmDeletions && !window.confirm(`Delete "${filename}"? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      const res = await fetch(apiUrl(`/nexup/preroll/${encodeURIComponent(filename)}`), {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        showAlert('Recently Added List deleted', 'success');
+        loadGeneratedRecentlyAddedLists();
         loadGeneratedPrerolls();
       } else {
         const err = await res.json();
@@ -17340,8 +17497,106 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
     if (activeTab === 'nexup/upcoming') {
       return renderNexUpUpcoming();
     }
+    if (activeTab === 'nexup/recently-added') {
+      return renderNexUpRecentlyAdded();
+    }
     // Default: Connections page
     return renderNexUpConnections();
+  };
+
+  // NeX-Up Recently Added Sub-Page - Shows content recently added to library
+  const loadRecentlyAddedPreview = async () => {
+    setRecentlyAddedLoading(true);
+    try {
+      const source = recentlyAddedListSettings.source || 'both';
+      const res = await fetch(apiUrl(`/nexup/preroll/recently-added-list/preview?source=${source}&max_items=50`));
+      if (res.ok) {
+        const data = await res.json();
+        setRecentlyAddedItems(data.items || []);
+      }
+    } catch (err) {
+      console.error('Failed to load recently added items:', err);
+    } finally {
+      setRecentlyAddedLoading(false);
+    }
+  };
+
+  const renderNexUpRecentlyAdded = () => {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        {/* Header */}
+        <div>
+          <h1 className="header" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+            <Film size={32} className="header-icon" /> Recently Added
+          </h1>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', margin: 0 }}>
+            Content recently added to your library from Radarr and Sonarr. These items appear in your Recently Added list videos.
+          </p>
+        </div>
+
+        {/* Refresh Button */}
+        <div>
+          <button
+            onClick={loadRecentlyAddedPreview}
+            disabled={recentlyAddedLoading}
+            className="button"
+            style={{ backgroundColor: '#00d4ff', color: '#000', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+          >
+            <RefreshCw size={16} className={recentlyAddedLoading ? 'spin' : ''} />
+            {recentlyAddedLoading ? 'Loading...' : 'Refresh List'}
+          </button>
+        </div>
+
+        {/* Items List */}
+        {recentlyAddedItems.length > 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {recentlyAddedItems.map((item, idx) => (
+              <div
+                key={idx}
+                className="card"
+                style={{
+                  display: 'flex',
+                  gap: '1rem',
+                  padding: '1rem',
+                  alignItems: 'flex-start',
+                  borderLeft: '3px solid #28a745'
+                }}
+              >
+                {/* Poster */}
+                {item.poster_url && (
+                  <img
+                    src={item.poster_url}
+                    alt={item.title}
+                    style={{
+                      width: '60px',
+                      height: '90px',
+                      objectFit: 'cover',
+                      borderRadius: '4px',
+                      flexShrink: 0
+                    }}
+                    onError={e => { e.target.style.display = 'none'; }}
+                  />
+                )}
+                {/* Info */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <h3 style={{ margin: 0, fontSize: '1.05rem' }}>{item.title}</h3>
+                  <p style={{ margin: '0.25rem 0 0', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                    <strong>Added:</strong> {item.added_date ? new Date(item.added_date).toLocaleDateString() : 'Unknown'}
+                    {item.type && <span style={{ marginLeft: '0.75rem', padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem', backgroundColor: item.type === 'movie' ? '#1e3a5f' : '#3a1e5f', color: '#fff' }}>{item.type === 'movie' ? 'Movie' : 'TV Show'}</span>}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : !recentlyAddedLoading ? (
+          <div className="card" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
+            <Film size={48} style={{ color: '#666', marginBottom: '1rem' }} />
+            <p>No recently added content found.</p>
+            <p style={{ fontSize: '0.9rem' }}>Click "Refresh List" to load recently added movies and shows from Radarr/Sonarr.</p>
+          </div>
+        ) : null}
+      </div>
+    );
   };
 
   // NeX-Up Upcoming Items Sub-Page - Full control over upcoming movies and TV shows
@@ -20116,7 +20371,8 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
           }}>
             {[
               { id: 'dynamic', icon: <Sparkles size={16} />, label: 'Dynamic Preroll' },
-              { id: 'coming-soon', icon: <Film size={16} />, label: 'Coming Soon List' }
+              { id: 'coming-soon', icon: <Film size={16} />, label: 'Coming Soon List' },
+              { id: 'recently-added', icon: <Film size={16} />, label: 'Recently Added List' }
             ].map(tab => (
               <button
                 key={tab.id}
@@ -21564,12 +21820,288 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
           </div>
           )}
 
+          {/* Recently Added List Generator */}
+          {generatorTab === 'recently-added' && (
+          <div className="card">
+            <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Film size={24} /> Recently Added List Generator
+            </h2>
+            <p style={{ color: '#888', marginBottom: '1rem' }}>
+              Generate a video showcasing content recently added to your library from Radarr and Sonarr.
+            </p>
+
+            {!ffmpegAvailable ? (
+              <div style={{
+                padding: '1rem',
+                backgroundColor: '#fff3cd',
+                border: '1px solid #ffc107',
+                borderRadius: '8px',
+                marginBottom: '1rem'
+              }}>
+                <strong style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><AlertTriangle size={18} /> FFmpeg Required</strong>
+                <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem' }}>
+                  FFmpeg must be installed to generate Recently Added List videos.
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* Layout Selection */}
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', fontWeight: 'bold', fontSize: '0.95rem' }}>
+                    <LayoutGrid size={16} /> Layout Style
+                  </label>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      onClick={() => setRecentlyAddedListSettings(prev => ({ ...prev, layout: 'grid' }))}
+                      className="button"
+                      style={{
+                        backgroundColor: recentlyAddedListSettings.layout === 'grid' ? '#00d4ff' : 'var(--card-bg)',
+                        color: recentlyAddedListSettings.layout === 'grid' ? '#000' : 'var(--text-color)',
+                        border: '1px solid var(--border-color)',
+                        flex: 1
+                      }}
+                    >
+                      Grid (Posters)
+                    </button>
+                    <button
+                      onClick={() => setRecentlyAddedListSettings(prev => ({ ...prev, layout: 'list' }))}
+                      className="button"
+                      style={{
+                        backgroundColor: recentlyAddedListSettings.layout === 'list' ? '#00d4ff' : 'var(--card-bg)',
+                        color: recentlyAddedListSettings.layout === 'list' ? '#000' : 'var(--text-color)',
+                        border: '1px solid var(--border-color)',
+                        flex: 1
+                      }}
+                    >
+                      List (Text)
+                    </button>
+                  </div>
+                </div>
+
+                {/* Content Source */}
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', fontWeight: 'bold', fontSize: '0.95rem' }}>
+                    Content Source
+                  </label>
+                  <select
+                    value={recentlyAddedListSettings.source}
+                    onChange={e => setRecentlyAddedListSettings(prev => ({ ...prev, source: e.target.value }))}
+                    className="input"
+                  >
+                    <option value="both">Movies & TV Shows</option>
+                    <option value="movies">Movies Only</option>
+                    <option value="shows">TV Shows Only</option>
+                  </select>
+                </div>
+
+                {/* Duration, Max Items, Days Back, Server Name */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1rem' }}>
+                  <div>
+                    <label style={{ fontSize: '0.85rem', color: '#aaa', marginBottom: '0.25rem', display: 'block' }}>Duration (seconds)</label>
+                    <input
+                      type="number"
+                      min="5"
+                      max="30"
+                      value={recentlyAddedListSettings.duration}
+                      onChange={e => setRecentlyAddedListSettings(prev => ({ ...prev, duration: parseInt(e.target.value) || 10 }))}
+                      className="input"
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.85rem', color: '#aaa', marginBottom: '0.25rem', display: 'block' }}>Max Items</label>
+                    <input
+                      type="number"
+                      min="4"
+                      max="12"
+                      value={recentlyAddedListSettings.maxItems}
+                      onChange={e => setRecentlyAddedListSettings(prev => ({ ...prev, maxItems: parseInt(e.target.value) || 8 }))}
+                      className="input"
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.85rem', color: '#aaa', marginBottom: '0.25rem', display: 'block' }}>Days Back</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="90"
+                      value={recentlyAddedListSettings.daysBack}
+                      onChange={e => setRecentlyAddedListSettings(prev => ({ ...prev, daysBack: parseInt(e.target.value) || 30 }))}
+                      className="input"
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '0.85rem', color: '#aaa', marginBottom: '0.25rem', display: 'block' }}>Server Name</label>
+                    <input
+                      type="text"
+                      placeholder="Your Server"
+                      value={recentlyAddedListSettings.serverName}
+                      onChange={e => setRecentlyAddedListSettings(prev => ({ ...prev, serverName: e.target.value }))}
+                      className="input"
+                    />
+                  </div>
+                </div>
+
+                {/* Color Settings */}
+                <details style={{ marginBottom: '1rem' }}>
+                  <summary style={{ cursor: 'pointer', fontWeight: 'bold', fontSize: '0.95rem', marginBottom: '0.5rem' }}>
+                    Color Settings
+                  </summary>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1rem', marginTop: '0.5rem' }}>
+                    <div>
+                      <label style={{ fontSize: '0.85rem', color: '#aaa', marginBottom: '0.25rem', display: 'block' }}>Background</label>
+                      <input
+                        type="color"
+                        value={recentlyAddedListSettings.bgColor}
+                        onChange={e => setRecentlyAddedListSettings(prev => ({ ...prev, bgColor: e.target.value }))}
+                        style={{ width: '100%', height: '35px', cursor: 'pointer' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.85rem', color: '#aaa', marginBottom: '0.25rem', display: 'block' }}>Text</label>
+                      <input
+                        type="color"
+                        value={recentlyAddedListSettings.textColor}
+                        onChange={e => setRecentlyAddedListSettings(prev => ({ ...prev, textColor: e.target.value }))}
+                        style={{ width: '100%', height: '35px', cursor: 'pointer' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.85rem', color: '#aaa', marginBottom: '0.25rem', display: 'block' }}>Accent</label>
+                      <input
+                        type="color"
+                        value={recentlyAddedListSettings.accentColor}
+                        onChange={e => setRecentlyAddedListSettings(prev => ({ ...prev, accentColor: e.target.value }))}
+                        style={{ width: '100%', height: '35px', cursor: 'pointer' }}
+                      />
+                    </div>
+                  </div>
+                </details>
+
+                {/* Options */}
+                <details style={{ marginBottom: '1rem' }}>
+                  <summary style={{ cursor: 'pointer', fontWeight: 'bold', fontSize: '0.95rem', marginBottom: '0.5rem' }}>
+                    Options
+                  </summary>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginTop: '0.5rem' }}>
+                    {/* Audio */}
+                    <div style={{ padding: '0.75rem', backgroundColor: 'var(--bg-color)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={recentlyAddedListSettings.includeAudio}
+                          onChange={e => setRecentlyAddedListSettings(prev => ({ ...prev, includeAudio: e.target.checked }))}
+                        />
+                        Include Audio
+                      </label>
+                    </div>
+                    {/* Auto-Regen */}
+                    <div style={{ padding: '0.75rem', backgroundColor: 'var(--bg-color)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={recentlyAddedListSettings.autoRegen}
+                          onChange={e => setRecentlyAddedListSettings(prev => ({ ...prev, autoRegen: e.target.checked }))}
+                        />
+                        Auto-regenerate on sync
+                      </label>
+                      {recentlyAddedListSettings.autoRegen && (
+                        <select
+                          value={recentlyAddedListSettings.autoRegenLayout}
+                          onChange={e => setRecentlyAddedListSettings(prev => ({ ...prev, autoRegenLayout: e.target.value }))}
+                          className="input"
+                          style={{ marginTop: '0.5rem', fontSize: '0.85rem' }}
+                        >
+                          <option value="both">Both layouts</option>
+                          <option value="grid">Grid only</option>
+                          <option value="list">List only</option>
+                        </select>
+                      )}
+                    </div>
+                  </div>
+                </details>
+
+                {/* Generate Button */}
+                <button
+                  onClick={handleGenerateRecentlyAddedList}
+                  disabled={recentlyAddedListGenerating}
+                  className="button"
+                  style={{
+                    width: '100%',
+                    backgroundColor: recentlyAddedListGenerating ? '#555' : '#00d4ff',
+                    color: '#000',
+                    padding: '0.75rem',
+                    fontSize: '1rem',
+                    fontWeight: 'bold',
+                    marginBottom: '1rem'
+                  }}
+                >
+                  {recentlyAddedListGenerating ? 'Generating...' : 'Generate Recently Added List'}
+                </button>
+
+                {/* Generated Lists */}
+                {generatedRecentlyAddedLists.length > 0 && (
+                  <div style={{ marginTop: '1rem' }}>
+                    <h3
+                      onClick={() => setRecentlyAddedListsCollapsed(!recentlyAddedListsCollapsed)}
+                      style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', userSelect: 'none' }}
+                    >
+                      {recentlyAddedListsCollapsed ? <ChevronRight size={20} /> : <ChevronDown size={20} />}
+                      <Film size={20} style={{ color: '#00d4ff' }} />
+                      Your Generated Recently Added Lists ({generatedRecentlyAddedLists.length})
+                    </h3>
+
+                    {!recentlyAddedListsCollapsed && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', marginTop: '1rem' }}>
+                        {generatedRecentlyAddedLists.map((item, idx) => (
+                          <div
+                            key={idx}
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              padding: '0.75rem',
+                              backgroundColor: 'var(--bg-color)',
+                              borderRadius: '8px',
+                              border: '1px solid var(--border-color)'
+                            }}
+                          >
+                            <span>{item.filename || item}</span>
+                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                              <button
+                                onClick={() => {
+                                  const url = apiUrl(`/nexup/preroll/play/${encodeURIComponent(item.filename || item)}`);
+                                  window.open(url, '_blank');
+                                }}
+                                className="button"
+                                style={{ backgroundColor: '#28a745', padding: '0.4rem 0.75rem', fontSize: '0.85rem' }}
+                              >
+                                Play
+                              </button>
+                              <button
+                                onClick={() => handleDeleteRecentlyAddedList(item.filename || item)}
+                                className="button"
+                                style={{ backgroundColor: '#dc3545', padding: '0.4rem 0.75rem', fontSize: '0.85rem' }}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+          )}
+
         </>
       ) : (
-        <div style={{ 
-          padding: '2rem', 
-          textAlign: 'center', 
-          backgroundColor: 'var(--bg-color)', 
+        <div style={{
+          padding: '2rem',
+          textAlign: 'center',
+          backgroundColor: 'var(--bg-color)',
           borderRadius: '8px',
           border: '1px dashed var(--border-color)'
         }}>
@@ -28814,6 +29346,7 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
            {[
              { id: 'nexup', icon: <Link size={16} />, label: 'Connections' },
              { id: 'nexup/upcoming', icon: <ClipboardList size={16} />, label: 'Upcoming' },
+             { id: 'nexup/recently-added', icon: <Film size={16} />, label: 'Recently Added' },
              { id: 'nexup/trailers', icon: <Film size={16} />, label: 'Your Trailers' },
              { id: 'nexup/settings', icon: <Settings size={16} />, label: 'Settings' },
              { id: 'nexup/generator', icon: <Sparkles size={16} />, label: 'Generator' }
