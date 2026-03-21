@@ -261,6 +261,22 @@ def ensure_schema() -> None:
                 ("nexup_coming_soon_available_days", "nexup_coming_soon_available_days INTEGER DEFAULT 1"),
                 ("nexup_coming_soon_max_available_now", "nexup_coming_soon_max_available_now INTEGER DEFAULT 0"),
                 ("nexup_trailer_retention_days", "nexup_trailer_retention_days INTEGER DEFAULT 7"),
+                # Recently Added List settings
+                ("nexup_recently_added_list_auto_regen", "nexup_recently_added_list_auto_regen BOOLEAN DEFAULT 0"),
+                ("nexup_recently_added_list_layout", "nexup_recently_added_list_layout TEXT DEFAULT 'grid'"),
+                ("nexup_recently_added_list_source", "nexup_recently_added_list_source TEXT DEFAULT 'both'"),
+                ("nexup_recently_added_list_duration", "nexup_recently_added_list_duration INTEGER DEFAULT 10"),
+                ("nexup_recently_added_list_max_items", "nexup_recently_added_list_max_items INTEGER DEFAULT 8"),
+                ("nexup_recently_added_list_bg_color", "nexup_recently_added_list_bg_color TEXT DEFAULT '#141428'"),
+                ("nexup_recently_added_list_text_color", "nexup_recently_added_list_text_color TEXT DEFAULT '#ffffff'"),
+                ("nexup_recently_added_list_accent_color", "nexup_recently_added_list_accent_color TEXT DEFAULT '#00d4ff'"),
+                ("nexup_recently_added_list_server_name", "nexup_recently_added_list_server_name TEXT DEFAULT ''"),
+                ("nexup_recently_added_list_auto_regen_layout", "nexup_recently_added_list_auto_regen_layout TEXT DEFAULT 'both'"),
+                ("nexup_recently_added_list_include_audio", "nexup_recently_added_list_include_audio BOOLEAN DEFAULT 0"),
+                ("nexup_recently_added_list_custom_audio_path", "nexup_recently_added_list_custom_audio_path TEXT"),
+                ("nexup_recently_added_list_custom_logo_path", "nexup_recently_added_list_custom_logo_path TEXT"),
+                ("nexup_recently_added_list_logo_mode", "nexup_recently_added_list_logo_mode TEXT DEFAULT 'watermark'"),
+                ("nexup_recently_added_days", "nexup_recently_added_days INTEGER DEFAULT 30"),
             ]
             for col, ddl in nexup_columns:
                 if not _sqlite_has_column("settings", col):
