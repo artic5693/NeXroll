@@ -18791,17 +18791,14 @@ async def preview_recently_added_list(
                 include_unmonitored = getattr(setting, 'nexup_include_unmonitored_shows', False)
                 shows = await sonarr_connector.get_recently_added_shows(days_back, include_unmonitored=include_unmonitored)
                 for show in shows:
-                    title = show.get('title', '')
-                    season_number = show.get('season_number', 1)
-                    if season_number and season_number > 1:
-                        title = f"{title} (S{season_number})"
                     items.append({
-                        'title': title,
+                        'title': show.get('title', ''),
                         'year': show.get('year'),
                         'overview': show.get('overview', ''),
                         'added_date': show.get('added_date', ''),
                         'poster_url': show.get('poster_url', ''),
                         'network': show.get('network', ''),
+                        'season_number': show.get('season_number'),
                         'genres': show.get('genres', []),
                         'type': 'show'
                     })

@@ -17619,12 +17619,22 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
                     />
                   )}
                   <div style={{ flex: 1 }}>
-                    <h3 style={{ margin: '0 0 0.5rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <h3 style={{ margin: '0 0 0.25rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       {item.title} {item.year && `(${item.year})`}
                     </h3>
+                    {item.season_number && (
+                      <p style={{ margin: '0 0 0.25rem 0', fontSize: '0.9rem', color: '#17a2b8', fontWeight: 500 }}>
+                        Season {item.season_number}
+                      </p>
+                    )}
                     <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.9rem' }}>
                       <strong>Added:</strong> {item.added_date ? new Date(item.added_date).toLocaleDateString() : 'Unknown'}
                     </p>
+                    {item.network && (
+                      <p style={{ margin: '0 0 0.25rem 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                        📺 {item.network}
+                      </p>
+                    )}
                     {item.overview && (
                       <p style={{ margin: '0', fontSize: '0.85rem', color: 'var(--text-secondary)', maxHeight: '40px', overflow: 'hidden' }}>
                         {item.overview.substring(0, 150)}{item.overview.length > 150 ? '...' : ''}
