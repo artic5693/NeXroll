@@ -839,6 +839,7 @@ const [applyingToServer, setApplyingToServer] = useState(false);
   const recentlyAddedListSettingsLoadedRef = React.useRef(false);
   const [recentlyAddedItems, setRecentlyAddedItems] = useState([]);
   const [recentlyAddedLoading, setRecentlyAddedLoading] = useState(false);
+  const [recentlyAddedTab, setRecentlyAddedTab] = useState('movies');
 
   // API Keys Management State
   const [apiKeys, setApiKeys] = useState([]);
@@ -17522,6 +17523,10 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
   };
 
   const renderNexUpRecentlyAdded = () => {
+    const recentMovies = recentlyAddedItems.filter(i => i.type === 'movie');
+    const recentShows = recentlyAddedItems.filter(i => i.type === 'show');
+    const filteredItems = recentlyAddedTab === 'movies' ? recentMovies : recentShows;
+
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
         {/* Header */}
@@ -17534,67 +17539,124 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
           </p>
         </div>
 
+        {/* Movies/Shows Tab Switcher */}
+        <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '2px solid var(--border-color)', paddingBottom: '0' }}>
+          <button
+            onClick={() => setRecentlyAddedTab('movies')}
+            style={{
+              padding: '0.75rem 1.5rem',
+              border: 'none',
+              borderBottom: recentlyAddedTab === 'movies' ? '3px solid var(--accent-color)' : '3px solid transparent',
+              backgroundColor: 'transparent',
+              color: recentlyAddedTab === 'movies' ? 'var(--accent-color)' : 'var(--text-color)',
+              cursor: 'pointer',
+              fontSize: '0.95rem',
+              fontWeight: recentlyAddedTab === 'movies' ? 600 : 400,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              marginBottom: '-2px'
+            }}
+          >
+            <Video size={18} /> Movies ({recentMovies.length})
+          </button>
+          <button
+            onClick={() => setRecentlyAddedTab('shows')}
+            style={{
+              padding: '0.75rem 1.5rem',
+              border: 'none',
+              borderBottom: recentlyAddedTab === 'shows' ? '3px solid #17a2b8' : '3px solid transparent',
+              backgroundColor: 'transparent',
+              color: recentlyAddedTab === 'shows' ? '#17a2b8' : 'var(--text-color)',
+              cursor: 'pointer',
+              fontSize: '0.95rem',
+              fontWeight: recentlyAddedTab === 'shows' ? 600 : 400,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              marginBottom: '-2px'
+            }}
+          >
+            <Tv size={18} /> TV Shows ({recentShows.length})
+          </button>
+        </div>
+
         {/* Refresh Button */}
-        <div>
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
           <button
             onClick={loadRecentlyAddedPreview}
             disabled={recentlyAddedLoading}
             className="button"
-            style={{ backgroundColor: '#00d4ff', color: '#000', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
           >
-            <RefreshCw size={16} className={recentlyAddedLoading ? 'spin' : ''} />
-            {recentlyAddedLoading ? 'Loading...' : 'Refresh List'}
+            {recentlyAddedLoading ? <Loader2 size={16} className="spin" /> : <RefreshCw size={16} />}
+            Refresh List
           </button>
         </div>
 
         {/* Items List */}
-        {recentlyAddedItems.length > 0 ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-            {recentlyAddedItems.map((item, idx) => (
-              <div
-                key={idx}
-                className="card"
-                style={{
-                  display: 'flex',
-                  gap: '1rem',
-                  padding: '1rem',
-                  alignItems: 'flex-start',
-                  borderLeft: '3px solid #28a745'
-                }}
-              >
-                {/* Poster */}
-                {item.poster_url && (
-                  <img
-                    src={item.poster_url}
-                    alt={item.title}
-                    style={{
-                      width: '60px',
-                      height: '90px',
-                      objectFit: 'cover',
-                      borderRadius: '4px',
-                      flexShrink: 0
-                    }}
-                    onError={e => { e.target.style.display = 'none'; }}
-                  />
-                )}
-                {/* Info */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <h3 style={{ margin: 0, fontSize: '1.05rem' }}>{item.title}</h3>
-                  <p style={{ margin: '0.25rem 0 0', color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-                    <strong>Added:</strong> {item.added_date ? new Date(item.added_date).toLocaleDateString() : 'Unknown'}
-                    {item.type && <span style={{ marginLeft: '0.75rem', padding: '2px 8px', borderRadius: '4px', fontSize: '0.8rem', backgroundColor: item.type === 'movie' ? '#1e3a5f' : '#3a1e5f', color: '#fff' }}>{item.type === 'movie' ? 'Movie' : 'TV Show'}</span>}
-                  </p>
+        <div className="card">
+          {filteredItems.length > 0 ? (
+            <div style={{ display: 'grid', gap: '1rem' }}>
+              {filteredItems.map((item, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    display: 'flex',
+                    gap: '1rem',
+                    padding: '1rem',
+                    backgroundColor: 'var(--bg-color)',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-color)'
+                  }}
+                >
+                  {item.poster_url && (
+                    <img
+                      src={item.poster_url}
+                      alt={item.title}
+                      style={{ width: '80px', height: '120px', objectFit: 'cover', borderRadius: '4px' }}
+                      onError={e => { e.target.style.display = 'none'; }}
+                    />
+                  )}
+                  <div style={{ flex: 1 }}>
+                    <h3 style={{ margin: '0 0 0.5rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      {item.title} {item.year && `(${item.year})`}
+                    </h3>
+                    <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.9rem' }}>
+                      <strong>Added:</strong> {item.added_date ? new Date(item.added_date).toLocaleDateString() : 'Unknown'}
+                      <span style={{
+                        marginLeft: '0.5rem',
+                        padding: '0.2rem 0.5rem',
+                        borderRadius: '4px',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        backgroundColor: '#28a745',
+                        color: '#fff'
+                      }}>
+                        In Library
+                      </span>
+                    </p>
+                    {item.overview && (
+                      <p style={{ margin: '0', fontSize: '0.85rem', color: 'var(--text-secondary)', maxHeight: '40px', overflow: 'hidden' }}>
+                        {item.overview.substring(0, 150)}{item.overview.length > 150 ? '...' : ''}
+                      </p>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        ) : !recentlyAddedLoading ? (
-          <div className="card" style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
-            <Film size={48} style={{ color: '#666', marginBottom: '1rem' }} />
-            <p>No recently added content found.</p>
-            <p style={{ fontSize: '0.9rem' }}>Click "Refresh List" to load recently added movies and shows from Radarr/Sonarr.</p>
-          </div>
-        ) : null}
+              ))}
+            </div>
+          ) : !recentlyAddedLoading ? (
+            <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
+              <Film size={48} style={{ marginBottom: '1rem', opacity: 0.5 }} />
+              <p>No recently added {recentlyAddedTab === 'movies' ? 'movies' : 'TV shows'} found.</p>
+              <p style={{ fontSize: '0.9rem' }}>Click "Refresh List" to load from {recentlyAddedTab === 'movies' ? 'Radarr' : 'Sonarr'}.</p>
+            </div>
+          ) : (
+            <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
+              <Loader2 size={32} className="spin" /><p>Loading recently added {recentlyAddedTab === 'movies' ? 'movies' : 'TV shows'}...</p>
+            </div>
+          )}
+        </div>
       </div>
     );
   };

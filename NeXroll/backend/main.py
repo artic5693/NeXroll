@@ -18772,8 +18772,12 @@ async def preview_recently_added_list(
                 for movie in movies:
                     items.append({
                         'title': movie.get('title', ''),
+                        'year': movie.get('year'),
+                        'overview': movie.get('overview', ''),
                         'added_date': movie.get('added_date', ''),
                         'poster_url': movie.get('poster_url', ''),
+                        'runtime': movie.get('runtime', 0),
+                        'genres': movie.get('genres', []),
                         'type': 'movie'
                     })
             except Exception as e:
@@ -18793,8 +18797,12 @@ async def preview_recently_added_list(
                         title = f"{title} (S{season_number})"
                     items.append({
                         'title': title,
+                        'year': show.get('year'),
+                        'overview': show.get('overview', ''),
                         'added_date': show.get('added_date', ''),
                         'poster_url': show.get('poster_url', ''),
+                        'network': show.get('network', ''),
+                        'genres': show.get('genres', []),
                         'type': 'show'
                     })
             except Exception as e:
