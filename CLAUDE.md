@@ -53,6 +53,22 @@ ssh -i ~/.ssh/unraid root@192.168.1.219 "docker pull ghcr.io/artic5693/nexroll:l
 | `NeXroll/backend/main.py` | FastAPI app — all API routes |
 | `Plugins/` | Plugin system for extensibility |
 
+## NeX-Up Trailer Sources
+
+Trailers are downloaded in priority order (highest quality first):
+
+| Priority | Source | Quality | Notes |
+|----------|--------|---------|-------|
+| -2 | **The Digital Theater** | 4K HEVC + DTS-HD MA 5.1 | Scraped from thedigitaltheater.com, downloaded via WeTransfer API |
+| -1 | Radarr YouTube URL | Up to 4K (YouTube) | From Radarr's `youTubeTrailerId` field |
+| 0 | Apple Trailers | 1080p | Site is dead (redirects to tv.apple.com) |
+| 1 | Vimeo (via TMDB) | Varies | Rare for mainstream content |
+| 2 | YouTube (via TMDB) | Up to 4K | Requires `remote_components: ejs:github` for JS challenge solving |
+
+**Digital Theater flow**: Master list scrape → fuzzy title match → movie page scrape → score variants (resolution, codec, audio) → resolve WeTransfer short link → direct CDN download. Index cached 6 hours. Toggle: `nexup_digital_theater_enabled` setting.
+
+**YouTube requirements**: `youtube_cookies.txt` in storage path (copied from Pinchflat) + Deno runtime for JS challenges.
+
 ## Fork Changes
 
 This fork (`artic5693/NeXroll`) adds:
@@ -60,3 +76,6 @@ This fork (`artic5693/NeXroll`) adds:
 - CORS restriction and API key migration (security hardening)
 - GHCR CI workflow for automated image builds
 - Unraid template pointing to fork's GHCR registry
+- The Digital Theater as highest-priority trailer source (4K lossless)
+- yt-dlp JS challenge solver integration (`remote_components: ejs:github`)
+- Format string fallback for unavailable resolutions
