@@ -1839,7 +1839,7 @@ else:
 _CSRF_RFC1918_RE = re.compile(
     r'^https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}'
     r'|10\.\d{1,3}\.\d{1,3}\.\d{1,3}'
-    r'|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?'
+    r'|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$'
 )
 _CSRF_EXEMPT_PREFIXES = ('/plugin/', '/jellyfin/plugin/', '/emby/plugin/')
 
