@@ -17657,16 +17657,6 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
                     )}
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'flex-end' }}>
-                    <span style={{
-                      padding: '0.5rem 1rem',
-                      borderRadius: '4px',
-                      backgroundColor: '#28a745',
-                      color: 'white',
-                      fontSize: '0.85rem',
-                      fontWeight: 500
-                    }}>
-                      ✓ Downloaded
-                    </span>
                     <button
                       onClick={() => handleToggleRecentlyAddedExclude(item)}
                       className="button"
