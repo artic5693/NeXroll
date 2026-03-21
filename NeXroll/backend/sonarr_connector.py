@@ -17,7 +17,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # TMDB API for getting trailer sources
-TMDB_API_KEY = "8d6d91941230817f7571f3524e6d49fc"  # Public API key for trailer lookups
+TMDB_API_KEY = ""  # Set via secrets.json or settings - no hardcoded fallback
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
 

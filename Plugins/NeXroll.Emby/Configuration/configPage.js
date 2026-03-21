@@ -37,15 +37,29 @@ define([], function () {
         if (url) {
             st.style.background = 'rgba(39,174,96,0.12)';
             st.style.border = '1px solid rgba(39,174,96,0.3)';
-            st.innerHTML =
-                '<span style="color:#27ae60;font-size:1.1em;font-weight:600;">&#10004; Connected to NeXroll</span>' +
-                '<br/><span style="color:#999;font-size:0.9em;">Server: ' + url + '</span>';
+            st.textContent = '';
+            var ok = document.createElement('span');
+            ok.style.cssText = 'color:#27ae60;font-size:1.1em;font-weight:600;';
+            ok.textContent = '\u2714 Connected to NeXroll';
+            var srv = document.createElement('span');
+            srv.style.cssText = 'color:#999;font-size:0.9em;';
+            srv.textContent = 'Server: ' + url;
+            st.appendChild(ok);
+            st.appendChild(document.createElement('br'));
+            st.appendChild(srv);
         } else {
             st.style.background = 'rgba(231,76,60,0.12)';
             st.style.border = '1px solid rgba(231,76,60,0.3)';
-            st.innerHTML =
-                '<span style="color:#e74c3c;font-size:1.1em;font-weight:600;">&#10008; Not Connected</span>' +
-                '<br/><span style="color:#999;font-size:0.9em;">Open your NeXroll dashboard and connect Emby.</span>';
+            st.textContent = '';
+            var fail = document.createElement('span');
+            fail.style.cssText = 'color:#e74c3c;font-size:1.1em;font-weight:600;';
+            fail.textContent = '\u2718 Not Connected';
+            var hint = document.createElement('span');
+            hint.style.cssText = 'color:#999;font-size:0.9em;';
+            hint.textContent = 'Open your NeXroll dashboard and connect Emby.';
+            st.appendChild(fail);
+            st.appendChild(document.createElement('br'));
+            st.appendChild(hint);
         }
     };
 

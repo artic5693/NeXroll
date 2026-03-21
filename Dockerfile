@@ -40,9 +40,15 @@ RUN apt-get update && \
         pkg-config && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Deno to a shared location (required for yt-dlp YouTube extraction)
-ENV DENO_INSTALL=/usr/local
-RUN curl -fsSL https://deno.land/install.sh | sh
+# Install pinned Deno binary with checksum verification (required for yt-dlp YouTube extraction)
+ARG DENO_VERSION=2.7.7
+ARG DENO_SHA256=0cd918870657ccc3d96ac682290e894dda374e2a742424aae9118b258a6cf7a3
+RUN curl -fsSL -o /tmp/deno.zip \
+        "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-x86_64-unknown-linux-gnu.zip" && \
+    echo "${DENO_SHA256}  /tmp/deno.zip" | sha256sum -c - && \
+    unzip -o /tmp/deno.zip -d /usr/local/bin/ && \
+    chmod +x /usr/local/bin/deno && \
+    rm /tmp/deno.zip
 
 WORKDIR /app/NeXroll
 

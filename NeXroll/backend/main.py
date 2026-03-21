@@ -82,7 +82,11 @@ def _get_tmdb_api_key(setting) -> str | None:
     return getattr(setting, 'nexup_tmdb_api_key', None) if setting else None
 
 # Lightweight runtime schema upgrades for older SQLite databases
+_VALID_SQL_IDENT = re.compile(r'^[a-z_][a-z0-9_]*$')
+
 def _sqlite_has_column(table: str, column: str) -> bool:
+    if not _VALID_SQL_IDENT.match(table) or not _VALID_SQL_IDENT.match(column):
+        raise ValueError(f"Invalid SQL identifier: {table}.{column}")
     try:
         with engine.connect() as conn:
             res = conn.exec_driver_sql(f'PRAGMA table_info({table})')
@@ -93,6 +97,14 @@ def _sqlite_has_column(table: str, column: str) -> bool:
         return False
 
 def _sqlite_add_column(table: str, ddl: str) -> None:
+    # Validate table name; ddl is a column definition like "col_name TYPE DEFAULT val"
+    if not _VALID_SQL_IDENT.match(table):
+        raise ValueError(f"Invalid SQL table name: {table}")
+    col_name = ddl.strip().split()[0]
+    if not _VALID_SQL_IDENT.match(col_name):
+        raise ValueError(f"Invalid SQL column name in DDL: {ddl}")
+    if ';' in ddl:
+        raise ValueError(f"Suspicious DDL (contains semicolon): {ddl}")
     try:
         with engine.connect() as conn:
             conn.exec_driver_sql(f'ALTER TABLE {table} ADD COLUMN {ddl}')
@@ -1404,6 +1416,13 @@ def _normalize_url(url: str) -> str:
         u = str(url).strip()
         if not u.startswith(("http://", "https://")):
             u = "http://" + u
+        # Block cloud metadata / link-local SSRF targets
+        from urllib.parse import urlparse
+        host = urlparse(u).hostname or ""
+        _SSRF_BLOCKED = ('169.254.169.254', 'metadata.google.internal',
+                         'metadata.google', '100.100.100.200')
+        if host in _SSRF_BLOCKED or host.startswith('169.254.'):
+            return ""
         return u.rstrip("/")
     except Exception:
         return ""
@@ -1815,6 +1834,28 @@ else:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+# CSRF protection: verify Origin/Referer for state-changing requests
+_CSRF_RFC1918_RE = re.compile(
+    r'^https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}'
+    r'|10\.\d{1,3}\.\d{1,3}\.\d{1,3}'
+    r'|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?'
+)
+_CSRF_EXEMPT_PREFIXES = ('/plugin/', '/jellyfin/plugin/', '/emby/plugin/')
+
+@app.middleware("http")
+async def _csrf_check_mw(request, call_next):
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return await call_next(request)
+    # Exempt plugin routes (called by Jellyfin/Emby servers)
+    if any(request.url.path.startswith(p) for p in _CSRF_EXEMPT_PREFIXES):
+        return await call_next(request)
+    origin = request.headers.get("origin") or request.headers.get("referer") or ""
+    # Allow requests with no Origin (non-browser clients like curl/Postman)
+    if origin and not _CSRF_RFC1918_RE.match(origin):
+        from starlette.responses import JSONResponse
+        return JSONResponse(status_code=403, content={"detail": "Cross-origin request blocked"})
+    return await call_next(request)
 
 # Log unhandled exceptions and 4xx/5xx responses to writable logs (with fallback)
 @app.middleware("http")
@@ -9527,8 +9568,12 @@ async def import_sequence_pattern(
             
             try:
                 with zipfile.ZipFile(tmp_path, 'r') as zip_ref:
-                    # Extract to temporary directory
+                    # Validate ZIP entries for path traversal (ZipSlip)
                     extract_dir = tempfile.mkdtemp()
+                    for entry in zip_ref.namelist():
+                        target = os.path.realpath(os.path.join(extract_dir, entry))
+                        if not target.startswith(os.path.realpath(extract_dir) + os.sep) and target != os.path.realpath(extract_dir):
+                            raise HTTPException(status_code=400, detail=f"Malicious ZIP entry detected: {entry}")
                     zip_ref.extractall(extract_dir)
                     
                     # Find the .nexseq file
@@ -12058,8 +12103,16 @@ def browse_folders(req: BrowseFolderRequest):
     import string
     
     path = (req.path or "").strip()
-    
+
+    # Security: block access to sensitive directories
+    _BLOCKED_PREFIXES = ('/proc', '/sys', '/dev', '/run', '/boot', '/root', '/etc')
+
     try:
+        if path:
+            norm = os.path.realpath(path)
+            if any(norm == bp or norm.startswith(bp + '/') for bp in _BLOCKED_PREFIXES):
+                raise HTTPException(status_code=403, detail="Access to this directory is not allowed")
+
         # If no path provided, return drive list (Windows) or root (Unix)
         if not path:
             if sys.platform.startswith("win"):
@@ -12836,6 +12889,9 @@ def restore_files(file: UploadFile = File(...), db: Session = Depends(get_db)):
                         # Extract relative path after "prerolls/"
                         rel_path = name[len("prerolls/"):]
                         target_path = os.path.join(PREROLLS_DIR, rel_path)
+                        # Validate path traversal
+                        if not os.path.realpath(target_path).startswith(os.path.realpath(PREROLLS_DIR) + os.sep):
+                            raise HTTPException(status_code=400, detail=f"Malicious ZIP entry detected: {name}")
                         os.makedirs(os.path.dirname(target_path), exist_ok=True)
                         with zip_ref.open(name) as src:
                             with open(target_path, "wb") as dst:
@@ -12849,6 +12905,9 @@ def restore_files(file: UploadFile = File(...), db: Session = Depends(get_db)):
                     for name in thumb_files:
                         rel_path = name[len("thumbnails/"):]
                         target_path = os.path.join(THUMBNAILS_DIR, rel_path)
+                        # Validate path traversal
+                        if not os.path.realpath(target_path).startswith(os.path.realpath(THUMBNAILS_DIR) + os.sep):
+                            raise HTTPException(status_code=400, detail=f"Malicious ZIP entry detected: {name}")
                         os.makedirs(os.path.dirname(target_path), exist_ok=True)
                         with zip_ref.open(name) as src:
                             with open(target_path, "wb") as dst:
@@ -12867,6 +12926,11 @@ def restore_files(file: UploadFile = File(...), db: Session = Depends(get_db)):
             else:
                 # Legacy format - just prerolls folder directly
                 print("RESTORE: Detected legacy backup format")
+                # Validate ZIP entries for path traversal (ZipSlip)
+                for entry in zip_ref.namelist():
+                    target = os.path.realpath(os.path.join(PREROLLS_DIR, entry))
+                    if not target.startswith(os.path.realpath(PREROLLS_DIR) + os.sep) and target != os.path.realpath(PREROLLS_DIR):
+                        raise HTTPException(status_code=400, detail=f"Malicious ZIP entry detected: {entry}")
                 zip_ref.extractall(PREROLLS_DIR)
                 restored_items.append("preroll files (legacy format)")
         
@@ -16265,7 +16329,7 @@ def open_youtube_browser(browser: str = Query('chrome', description="Browser to 
                 webbrowser.open(youtube_url)
                 return {"success": True, "message": f"Opened YouTube in {browser}. Please sign in if not already."}
             elif cmd:
-                subprocess.run(cmd)
+                subprocess.run(cmd, timeout=15, capture_output=True)
                 return {"success": True, "message": f"Opened YouTube in {browser}. Please sign in if not already."}
     except Exception as e:
         _file_log(f"Failed to open specific browser {browser}: {e}")
