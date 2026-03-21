@@ -346,7 +346,21 @@ def ensure_schema() -> None:
             # Coming Soon TV Trailers: ensure excluded_from_list column
             if not _sqlite_has_column("coming_soon_tv_trailers", "excluded_from_list"):
                 _sqlite_add_column("coming_soon_tv_trailers", "excluded_from_list BOOLEAN DEFAULT 0")
-            
+
+            # Recently Added Exclusions table
+            with engine.connect() as conn:
+                conn.exec_driver_sql("""
+                    CREATE TABLE IF NOT EXISTS recently_added_exclusions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        title TEXT NOT NULL,
+                        item_type TEXT,
+                        excluded BOOLEAN DEFAULT 1,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS idx_ra_excl_title ON recently_added_exclusions(title)")
+                conn.commit()
+
             # Settings: NeX-Up unmonitored settings
             if not _sqlite_has_column("settings", "nexup_include_unmonitored_movies"):
                 _sqlite_add_column("settings", "nexup_include_unmonitored_movies BOOLEAN DEFAULT 0")
@@ -17288,6 +17302,27 @@ def toggle_tv_trailer_exclusion(trailer_id: int, db: Session = Depends(get_db)):
     status = "excluded from" if trailer.excluded_from_list else "included in"
     return {"success": True, "message": f"TV Trailer {status} Coming Soon list", "excluded_from_list": trailer.excluded_from_list}
 
+
+@app.put("/nexup/recently-added/exclude")
+def toggle_recently_added_exclusion(title: str, item_type: str = "movie", db: Session = Depends(get_db)):
+    """Toggle whether an item is excluded from Recently Added List generation"""
+    existing = db.query(models.RecentlyAddedExclusion).filter(
+        models.RecentlyAddedExclusion.title == title
+    ).first()
+
+    if existing:
+        # Toggle: if excluded, remove the record (include it); if somehow not excluded, exclude it
+        db.delete(existing)
+        db.commit()
+        return {"success": True, "excluded": False, "message": f'"{title}" included in Recently Added list'}
+    else:
+        # Create exclusion record
+        exclusion = models.RecentlyAddedExclusion(title=title, item_type=item_type, excluded=True)
+        db.add(exclusion)
+        db.commit()
+        return {"success": True, "excluded": True, "message": f'"{title}" excluded from Recently Added list'}
+
+
 @app.post("/nexup/sync")
 async def sync_nexup(db: Session = Depends(get_db)):
     """
@@ -18672,6 +18707,13 @@ async def generate_recently_added_list(
     # Sort by added date (most recent first)
     items.sort(key=lambda x: x.get('release_date') or '0000-01-01', reverse=True)
 
+    # Filter out excluded items
+    try:
+        excluded_titles = {e.title for e in db.query(models.RecentlyAddedExclusion).all()}
+        items = [i for i in items if i['title'] not in excluded_titles]
+    except Exception:
+        pass
+
     # Convert colors from CSS hex to FFmpeg format
     bg_ffmpeg = bg_color.replace('#', '0x')
     text_ffmpeg = text_color.replace('#', '0x')
@@ -18816,6 +18858,16 @@ async def preview_recently_added_list(
 
     # Sort by added date (most recent first)
     items.sort(key=lambda x: x.get('added_date') or '0000-01-01', reverse=True)
+
+    # Check exclusion status for each item
+    excluded_titles = set()
+    try:
+        exclusions = db.query(models.RecentlyAddedExclusion).all()
+        excluded_titles = {e.title for e in exclusions}
+    except Exception:
+        pass
+    for item in items:
+        item['excluded_from_list'] = item['title'] in excluded_titles
 
     movie_count = len([i for i in items if i['type'] == 'movie'])
     show_count = len([i for i in items if i['type'] == 'show'])

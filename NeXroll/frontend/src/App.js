@@ -17506,6 +17506,20 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
   };
 
   // NeX-Up Recently Added Sub-Page - Shows content recently added to library
+  const handleToggleRecentlyAddedExclude = async (item) => {
+    try {
+      const res = await fetch(apiUrl(`/nexup/recently-added/exclude?title=${encodeURIComponent(item.title)}&item_type=${item.type}`), { method: 'PUT' });
+      if (res.ok) {
+        // Update local state immediately
+        setRecentlyAddedItems(prev => prev.map(i =>
+          i.title === item.title ? { ...i, excluded_from_list: !i.excluded_from_list } : i
+        ));
+      }
+    } catch (err) {
+      console.error('Failed to toggle exclude:', err);
+    }
+  };
+
   const loadRecentlyAddedPreview = async () => {
     setRecentlyAddedLoading(true);
     try {
@@ -17605,9 +17619,10 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
                     display: 'flex',
                     gap: '1rem',
                     padding: '1rem',
-                    backgroundColor: 'var(--bg-color)',
+                    backgroundColor: item.excluded_from_list ? 'rgba(220, 53, 69, 0.1)' : 'var(--bg-color)',
                     borderRadius: '8px',
-                    border: '1px solid var(--border-color)'
+                    border: `1px solid ${item.excluded_from_list ? '#dc3545' : '#28a745'}`,
+                    opacity: item.excluded_from_list ? 0.7 : 1
                   }}
                 >
                   {item.poster_url && (
@@ -17640,6 +17655,35 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
                         {item.overview.substring(0, 150)}{item.overview.length > 150 ? '...' : ''}
                       </p>
                     )}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'flex-end' }}>
+                    <span style={{
+                      padding: '0.5rem 1rem',
+                      borderRadius: '4px',
+                      backgroundColor: '#28a745',
+                      color: 'white',
+                      fontSize: '0.85rem',
+                      fontWeight: 500
+                    }}>
+                      ✓ Downloaded
+                    </span>
+                    <button
+                      onClick={() => handleToggleRecentlyAddedExclude(item)}
+                      className="button"
+                      style={{
+                        backgroundColor: item.excluded_from_list ? '#dc3545' : 'transparent',
+                        border: '1px solid ' + (item.excluded_from_list ? '#dc3545' : 'var(--border-color)'),
+                        color: item.excluded_from_list ? 'white' : 'var(--text-color)',
+                        fontSize: '0.8rem',
+                        padding: '0.35rem 0.75rem',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.35rem'
+                      }}
+                      title={item.excluded_from_list ? 'Include in Recently Added list' : 'Exclude from Recently Added list'}
+                    >
+                      {item.excluded_from_list ? <><EyeOff size={14} /> Excluded</> : <><Eye size={14} /> In List</>}
+                    </button>
                   </div>
                 </div>
               ))}

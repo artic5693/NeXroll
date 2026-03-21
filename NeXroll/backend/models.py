@@ -211,6 +211,17 @@ class ComingSoonTVTrailer(Base):
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
 
+class RecentlyAddedExclusion(Base):
+    """Tracks items excluded from Recently Added List generation"""
+    __tablename__ = "recently_added_exclusions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String, index=True)  # Movie/show title (unique key for exclusion)
+    item_type = Column(String)  # 'movie' or 'show'
+    excluded = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
 class Setting(Base):
     __tablename__ = "settings"
 
