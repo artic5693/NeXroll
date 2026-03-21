@@ -16203,6 +16203,7 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
         alert(`Trailer downloaded successfully for ${showTitle}!`);
         loadNexupTVTrailers();
         loadNexupUpcomingTV();
+        loadRecentlyAddedPreview();
       } else {
         alert('Download failed: ' + (data.message || 'Unknown error'));
       }
@@ -16519,6 +16520,7 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
         loadNexupTrailers();
         loadNexupStorage();
         handleLoadNexupUpcoming(); // Refresh to show downloaded status
+        loadRecentlyAddedPreview(); // Refresh Recently Added status too
       } else {
         alert('⚠️ Download failed: ' + (data.message || 'Unknown error'));
       }
@@ -17621,7 +17623,7 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
                     padding: '1rem',
                     backgroundColor: item.excluded_from_list ? 'rgba(220, 53, 69, 0.1)' : 'var(--bg-color)',
                     borderRadius: '8px',
-                    border: `1px solid ${item.excluded_from_list ? '#dc3545' : '#28a745'}`,
+                    border: `1px solid ${item.excluded_from_list ? '#dc3545' : item.downloaded ? '#28a745' : 'var(--border-color)'}`,
                     opacity: item.excluded_from_list ? 0.7 : 1
                   }}
                 >
@@ -17657,6 +17659,44 @@ curl -X POST "http://YOUR_HOST:9393/plex/stable-token/save?token=YOUR_PLEX_TOKEN
                     )}
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'flex-end' }}>
+                    {/* Download/Downloaded Status */}
+                    {item.downloaded ? (
+                      <span style={{
+                        padding: '0.5rem 1rem',
+                        borderRadius: '4px',
+                        backgroundColor: '#28a745',
+                        color: 'white',
+                        fontSize: '0.85rem',
+                        fontWeight: 500
+                      }}>
+                        ✓ Downloaded
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => item.type === 'movie'
+                          ? handleDownloadTrailer(item.radarr_id, item.title)
+                          : handleDownloadTVTrailer(item.sonarr_id, item.season_number, item.title)
+                        }
+                        disabled={downloadingTrailerId === (item.type === 'movie' ? item.radarr_id : `tv_${item.sonarr_id}_${item.season_number}`) || recentlyAddedLoading}
+                        className="button"
+                        style={{
+                          backgroundColor: downloadingTrailerId === (item.type === 'movie' ? item.radarr_id : `tv_${item.sonarr_id}_${item.season_number}`) ? '#6c757d' : item.type === 'movie' ? '#007bff' : '#17a2b8',
+                          minWidth: '140px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '0.5rem',
+                          fontSize: '0.85rem'
+                        }}
+                      >
+                        {downloadingTrailerId === (item.type === 'movie' ? item.radarr_id : `tv_${item.sonarr_id}_${item.season_number}`) ? (
+                          <><Loader2 size={14} className="spin" /> Downloading...</>
+                        ) : (
+                          <><Download size={14} /> Download</>
+                        )}
+                      </button>
+                    )}
+                    {/* Exclude from List Toggle */}
                     <button
                       onClick={() => handleToggleRecentlyAddedExclude(item)}
                       className="button"

@@ -18820,6 +18820,7 @@ async def preview_recently_added_list(
                         'poster_url': movie.get('poster_url', ''),
                         'runtime': movie.get('runtime', 0),
                         'genres': movie.get('genres', []),
+                        'radarr_id': movie.get('radarr_id'),
                         'type': 'movie'
                     })
             except Exception as e:
@@ -18841,6 +18842,7 @@ async def preview_recently_added_list(
                         'poster_url': show.get('poster_url', ''),
                         'network': show.get('network', ''),
                         'season_number': show.get('season_number'),
+                        'sonarr_id': show.get('sonarr_id'),
                         'genres': show.get('genres', []),
                         'type': 'show'
                     })
@@ -18866,8 +18868,31 @@ async def preview_recently_added_list(
         excluded_titles = {e.title for e in exclusions}
     except Exception:
         pass
+
+    # Check trailer download status — reuse existing ComingSoonTrailer/TV tables
+    movie_trailer_map = {}
+    tv_trailer_map = {}
+    try:
+        existing_movie_trailers = db.query(models.ComingSoonTrailer).all()
+        movie_trailer_map = {t.radarr_movie_id: t for t in existing_movie_trailers}
+    except Exception:
+        pass
+    try:
+        existing_tv_trailers = db.query(models.ComingSoonTVTrailer).all()
+        tv_trailer_map = {(t.sonarr_series_id, t.season_number): t for t in existing_tv_trailers}
+    except Exception:
+        pass
+
     for item in items:
         item['excluded_from_list'] = item['title'] in excluded_titles
+        if item['type'] == 'movie':
+            trailer = movie_trailer_map.get(item.get('radarr_id'))
+            item['downloaded'] = trailer is not None
+            item['trailer_db_id'] = trailer.id if trailer else None
+        else:
+            trailer = tv_trailer_map.get((item.get('sonarr_id'), item.get('season_number')))
+            item['downloaded'] = trailer is not None
+            item['trailer_db_id'] = trailer.id if trailer else None
 
     movie_count = len([i for i in items if i['type'] == 'movie'])
     show_count = len([i for i in items if i['type'] == 'show'])
