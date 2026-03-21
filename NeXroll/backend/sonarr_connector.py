@@ -359,7 +359,7 @@ class SonarrConnector:
                         'page': 1,
                         'sortKey': 'date',
                         'sortDirection': 'descending',
-                        'eventType': 'downloadFolderImported',
+                        'eventType': 3,
                         'includeSeries': 'true',
                         'includeEpisode': 'true'
                     }
