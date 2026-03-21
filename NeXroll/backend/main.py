@@ -674,6 +674,9 @@ def ensure_settings_schema_now() -> None:
             for col, ddl in need.items():
                 if col not in cols:
                     try:
+                        # Validate identifiers even though values are hardcoded (defense-in-depth)
+                        if not _VALID_SQL_IDENT.match(col):
+                            raise ValueError(f"Invalid column name: {col}")
                         conn.exec_driver_sql(f"ALTER TABLE settings ADD COLUMN {col} {ddl}")
                         added_columns.append(col)
                         try:
