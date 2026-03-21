@@ -19,7 +19,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # TMDB API for getting trailer sources
-TMDB_API_KEY = "8d6d91941230817f7571f3524e6d49fc"  # Public API key for trailer lookups
+TMDB_API_KEY = ""  # Set via secrets.json or settings - no hardcoded fallback
 TMDB_BASE_URL = "https://api.themoviedb.org/3"
 
 # Apple Trailers base URL
@@ -102,6 +102,311 @@ class AppleTrailerFetcher:
             return None
 
 
+import time
+from bs4 import BeautifulSoup
+
+
+class DigitalTheaterFetcher:
+    """Fetches 4K lossless trailers from The Digital Theater (thedigitaltheater.com).
+
+    Trailers are distributed via WeTransfer links embedded in blog posts.
+    Offers 4K HEVC with DTS-HD MA / Dolby Atmos audio — far superior to YouTube.
+    """
+
+    MASTER_LIST_URL = "https://thedigitaltheater.com/master-trailer-list/"
+    CACHE_TTL = 21600  # 6 hours
+    USER_AGENT = "Mozilla/5.0 (compatible; nexroll/1.0; +https://github.com/artic5693/nexroll)"
+
+    def __init__(self):
+        self._index_cache: Dict[str, str] = {}  # normalized title -> movie page URL
+        self._index_cache_time: float = 0
+        self._page_cache: Dict[str, List[Dict]] = {}  # movie URL -> variants list
+        self._page_cache_times: Dict[str, float] = {}
+
+    def _normalize_title(self, title: str) -> str:
+        """Normalize title for matching: lowercase, strip punctuation."""
+        t = title.lower().strip()
+        t = re.sub(r'[^\w\s()]', '', t)
+        t = re.sub(r'\s+', ' ', t)
+        return t
+
+    async def _build_index(self):
+        """Scrape master trailer list to build title -> URL index. Cached for 6 hours."""
+        if self._index_cache and (time.time() - self._index_cache_time) < self.CACHE_TTL:
+            return
+
+        try:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                response = await client.get(
+                    self.MASTER_LIST_URL,
+                    headers={'User-Agent': self.USER_AGENT}
+                )
+                response.raise_for_status()
+
+            soup = BeautifulSoup(response.text, 'lxml')
+            new_index: Dict[str, str] = {}
+
+            # Master list is an HTML table with links to individual movie pages
+            for link in soup.find_all('a', href=True):
+                href = link['href']
+                text = link.get_text(strip=True)
+
+                # Only include links to thedigitaltheater.com movie pages with a year
+                if 'thedigitaltheater.com/' not in href:
+                    continue
+                # Match "Title (YYYY)" pattern
+                year_match = re.search(r'\((\d{4})\)', text)
+                if not year_match:
+                    continue
+                # Skip category/tag/page links
+                if any(x in href for x in ['/category/', '/tag/', '/page/', '/master-trailer-list']):
+                    continue
+
+                normalized = self._normalize_title(text)
+                new_index[normalized] = href
+
+            if new_index:
+                self._index_cache = new_index
+                self._index_cache_time = time.time()
+                logger.info(f"Digital Theater: indexed {len(new_index)} movies")
+            else:
+                logger.debug("Digital Theater: master list returned no entries")
+
+        except Exception as e:
+            logger.debug(f"Digital Theater: failed to build index: {e}")
+
+    async def search_movie(self, title: str, year: Optional[int] = None) -> Optional[str]:
+        """Search for a movie in the index. Returns movie page URL or None."""
+        await self._build_index()
+        if not self._index_cache:
+            return None
+
+        # Try exact match: "title (year)"
+        if year:
+            exact = self._normalize_title(f"{title} ({year})")
+            if exact in self._index_cache:
+                return self._index_cache[exact]
+
+        # Try fuzzy: normalize the search title and match against index keys
+        search_norm = self._normalize_title(title)
+        for key, url in self._index_cache.items():
+            # Extract title portion (before year parenthetical)
+            key_title = re.sub(r'\s*\(\d{4}\)\s*$', '', key).strip()
+            if search_norm == key_title:
+                # If year specified, verify it matches
+                if year:
+                    key_year_match = re.search(r'\((\d{4})\)', key)
+                    if key_year_match and int(key_year_match.group(1)) != year:
+                        continue
+                return url
+
+        # Try substring containment (handles "The" prefix differences etc.)
+        for key, url in self._index_cache.items():
+            key_title = re.sub(r'\s*\(\d{4}\)\s*$', '', key).strip()
+            if search_norm in key_title or key_title in search_norm:
+                if year:
+                    key_year_match = re.search(r'\((\d{4})\)', key)
+                    if key_year_match and int(key_year_match.group(1)) != year:
+                        continue
+                return url
+
+        return None
+
+    def _score_variant(self, name: str) -> int:
+        """Score a trailer variant by quality. Higher = better."""
+        score = 0
+        name_lower = name.lower()
+
+        # Resolution
+        if '3840' in name or '4k' in name_lower or '2160' in name:
+            score += 100
+        elif '1920' in name or '1080' in name_lower:
+            score += 50
+
+        # IMAX bonus
+        if 'imax' in name_lower:
+            score += 20
+
+        # Audio
+        if 'dts-hd ma' in name_lower or 'dts-hd' in name_lower:
+            score += 100
+        elif 'atmos' in name_lower:
+            score += 100
+        elif 'pcm' in name_lower and '5.1' in name:
+            score += 90
+        elif 'ac3' in name_lower and '5.1' in name:
+            score += 50
+        elif 'stereo' in name_lower:
+            score += 10
+
+        # Video codec
+        if 'hevc' in name_lower and '10' in name_lower:
+            score += 20
+        elif 'hevc' in name_lower:
+            score += 15
+        elif 'avc' in name_lower:
+            score += 10
+
+        # Prefer MKV container (lossless audio passthrough)
+        if 'mkv' in name_lower:
+            score += 5
+
+        return score
+
+    async def _scrape_movie_page(self, movie_url: str) -> List[Dict[str, Any]]:
+        """Scrape a movie page for download variants with we.tl links."""
+        # Check cache
+        if movie_url in self._page_cache:
+            if (time.time() - self._page_cache_times.get(movie_url, 0)) < self.CACHE_TTL:
+                return self._page_cache[movie_url]
+
+        try:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+                response = await client.get(
+                    movie_url,
+                    headers={'User-Agent': self.USER_AGENT}
+                )
+                response.raise_for_status()
+
+            soup = BeautifulSoup(response.text, 'lxml')
+            variants = []
+
+            # Find all we.tl links and their surrounding context
+            for link in soup.find_all('a', href=True):
+                href = link['href']
+                if 'we.tl/' not in href and 'wetransfer.com' not in href:
+                    continue
+
+                # Get the context text — check parent <td>, <li>, <p>, or surrounding text
+                context = ''
+                parent = link.parent
+                while parent and parent.name not in ('tr', 'li', 'div', 'body'):
+                    parent = parent.parent
+                if parent and parent.name == 'tr':
+                    context = parent.get_text(' ', strip=True)
+                elif parent:
+                    context = parent.get_text(' ', strip=True)
+
+                if not context:
+                    context = link.get_text(strip=True)
+
+                score = self._score_variant(context)
+
+                # Determine resolution from context
+                resolution = '1080p'
+                if '3840' in context or '4k' in context.lower() or '2160' in context:
+                    resolution = '2160p'
+
+                variants.append({
+                    'name': context[:200],
+                    'we_tl_url': href,
+                    'score': score,
+                    'resolution': resolution,
+                })
+
+            # Sort by score descending
+            variants.sort(key=lambda x: -x['score'])
+
+            if variants:
+                self._page_cache[movie_url] = variants
+                self._page_cache_times[movie_url] = time.time()
+                logger.info(f"Digital Theater: found {len(variants)} variants, best score={variants[0]['score']}")
+
+            return variants
+
+        except Exception as e:
+            logger.debug(f"Digital Theater: failed to scrape {movie_url}: {e}")
+            return []
+
+    async def _resolve_wetransfer(self, we_tl_url: str) -> Optional[Dict[str, str]]:
+        """Resolve a we.tl short link to a direct download URL via WeTransfer API.
+
+        Returns {'url': direct_download_url, 'filename': original_filename} or None.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=30, follow_redirects=False) as client:
+                # Step 1: Resolve short link to get transfer_id and security_hash
+                response = await client.get(we_tl_url, headers={'User-Agent': self.USER_AGENT})
+
+                if response.status_code not in (301, 302, 303, 307):
+                    logger.debug(f"Digital Theater: we.tl link did not redirect: {response.status_code}")
+                    return None
+
+                redirect_url = response.headers.get('location', '')
+
+                # Parse transfer_id and security_hash from redirect URL
+                # Pattern: .../downloads/{transfer_id}/{security_hash}?...
+                match = re.search(r'/downloads/([^/]+)/([^?]+)', redirect_url)
+                if not match:
+                    logger.debug(f"Digital Theater: could not parse WeTransfer redirect: {redirect_url[:100]}")
+                    return None
+
+                transfer_id = match.group(1)
+                security_hash = match.group(2)
+
+            # Step 2: Call WeTransfer download API
+            async with httpx.AsyncClient(timeout=60) as client:
+                api_response = await client.post(
+                    f"https://wetransfer.com/api/v4/transfers/{transfer_id}/download",
+                    json={"security_hash": security_hash, "intent": "entire_transfer"},
+                    headers={'Content-Type': 'application/json'}
+                )
+                api_response.raise_for_status()
+                data = api_response.json()
+
+            direct_link = data.get('direct_link')
+            if not direct_link:
+                logger.debug("Digital Theater: WeTransfer API returned no direct_link")
+                return None
+
+            # Extract filename from the direct link URL
+            filename = 'trailer.mkv'
+            url_path = direct_link.split('?')[0]
+            if '/' in url_path:
+                filename = url_path.rsplit('/', 1)[-1]
+
+            return {'url': direct_link, 'filename': filename}
+
+        except Exception as e:
+            logger.debug(f"Digital Theater: WeTransfer resolution failed: {e}")
+            return None
+
+    async def get_best_trailer(self, title: str, year: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """Find the best Digital Theater trailer for a movie.
+
+        Returns a source dict compatible with TMDBTrailerFetcher or None.
+        """
+        movie_url = await self.search_movie(title, year)
+        if not movie_url:
+            return None
+
+        logger.info(f"Digital Theater: found page for '{title}': {movie_url}")
+
+        variants = await self._scrape_movie_page(movie_url)
+        if not variants:
+            return None
+
+        # Try resolving the best variant, fall back to next if WeTransfer link is dead
+        for variant in variants[:3]:  # Try top 3 at most
+            resolved = await self._resolve_wetransfer(variant['we_tl_url'])
+            if resolved:
+                logger.info(f"Digital Theater: resolved '{variant['name'][:80]}' -> direct download")
+                return {
+                    'source': 'digitaltheater',
+                    'url': resolved['url'],
+                    'key': variant['we_tl_url'],
+                    'name': f"Digital Theater: {variant['name'][:100]}",
+                    'official': True,
+                    'size': 2160 if variant['resolution'] == '2160p' else 1080,
+                    'priority': -2,  # Highest priority — best quality
+                    'resolution': variant['resolution'],
+                    'filename': resolved['filename'],
+                }
+
+        logger.debug(f"Digital Theater: all WeTransfer links failed for '{title}'")
+        return None
+
+
 class TMDBTrailerFetcher:
     """Fetches trailer URLs from TMDB with multiple source support"""
     
@@ -109,17 +414,28 @@ class TMDBTrailerFetcher:
         self.api_key = tmdb_api_key or TMDB_API_KEY
         self.base_url = TMDB_BASE_URL
         self.apple_fetcher = AppleTrailerFetcher()
+        self.digital_theater = DigitalTheaterFetcher()
         self.tmdb_available = True  # Track if TMDB is working
-    
-    async def get_trailer_sources(self, tmdb_id: int, title: str = None, year: int = None) -> List[Dict[str, Any]]:
+
+    async def get_trailer_sources(self, tmdb_id: int, title: str = None, year: int = None, digital_theater_enabled: bool = True) -> List[Dict[str, Any]]:
         """
-        Get all trailer sources for a movie from TMDB and Apple Trailers.
-        Returns list of trailers with source info (YouTube, Vimeo, Apple, etc.)
-        Prioritizes sources that don't have bot detection.
+        Get all trailer sources for a movie from TMDB, Digital Theater, and Apple Trailers.
+        Returns list of trailers with source info (YouTube, Vimeo, Apple, Digital Theater, etc.)
+        Prioritizes sources with best quality and no bot detection.
         """
         trailers = []
-        
-        # Try Apple Trailers first (no bot detection!)
+
+        # Try Digital Theater first (4K lossless audio, no bot detection!)
+        if title and digital_theater_enabled:
+            try:
+                dt_trailer = await self.digital_theater.get_best_trailer(title, year)
+                if dt_trailer:
+                    trailers.append(dt_trailer)
+                    logger.info(f"Found Digital Theater trailer for {title}")
+            except Exception as e:
+                logger.debug(f"Digital Theater lookup failed: {e}")
+
+        # Try Apple Trailers (no bot detection, but site is mostly dead)
         if title:
             try:
                 apple_movie = await self.apple_fetcher.search_movie(title, year)
@@ -670,9 +986,9 @@ class TrailerDownloader:
         
         # Quality format mapping
         self.quality_formats = {
-            '720': 'bestvideo[height<=720]+bestaudio/best[height<=720]',
-            '1080': 'bestvideo[height<=1080]+bestaudio/best[height<=1080]',
-            '4k': 'bestvideo[height<=2160]+bestaudio/best[height<=2160]',
+            '720': 'bestvideo[height<=720]+bestaudio/best[height<=720]/best',
+            '1080': 'bestvideo[height<=1080]+bestaudio/best[height<=1080]/best',
+            '4k': 'bestvideo[height<=2160]+bestaudio/best[height<=2160]/best',
             'best': 'bestvideo+bestaudio/best'
         }
         
@@ -748,9 +1064,10 @@ class TrailerDownloader:
         output_path: Path,
         title: str
     ) -> Optional[Dict[str, Any]]:
-        """Download a direct video URL (Apple Trailers, etc.) without yt-dlp"""
+        """Download a direct video URL (Apple Trailers, Digital Theater, etc.) without yt-dlp"""
         try:
-            async with httpx.AsyncClient(timeout=300, follow_redirects=True) as client:
+            # Use longer timeout for large files (Digital Theater MKVs can be 1-2GB)
+            async with httpx.AsyncClient(timeout=httpx.Timeout(connect=30, read=600, write=30, pool=30), follow_redirects=True) as client:
                 logger.info(f"Direct downloading: {title} from {url[:50]}...")
                 
                 # Stream the download for large files
@@ -918,7 +1235,21 @@ class TrailerDownloader:
                 logger.info(f"Trying {source_type} source: {source_name}")
                 
                 # Different strategies based on source
-                if source_type == 'apple':
+                if source_type == 'digitaltheater':
+                    # Digital Theater - direct download from WeTransfer (4K lossless audio!)
+                    # Use original filename extension (usually .mkv)
+                    filename = source.get('filename', f"{safe_title}_{tmdb_id}_trailer.mkv")
+                    ext = Path(filename).suffix or '.mkv'
+                    id_part = tmdb_id if tmdb_id else (tvdb_id or 'unknown')
+                    output_path = output_dir / f"{safe_title}_{id_part}_trailer{ext}"
+                    result = await self._download_direct_url(source_url, output_path, title)
+                    if result:
+                        result['resolution'] = source.get('resolution', '2160p')
+                        logger.info(f"Successfully downloaded from Digital Theater: {title} ({result['resolution']})")
+                        return result
+                    last_error = f"Digital Theater download failed for {source_name}"
+
+                elif source_type == 'apple':
                     # Apple Trailers - direct download without yt-dlp (no bot detection!)
                     output_path = output_dir / f"{safe_title}_{tmdb_id}_trailer.mov"
                     result = await self._download_direct_url(source_url, output_path, title)
@@ -926,7 +1257,7 @@ class TrailerDownloader:
                         logger.info(f"Successfully downloaded from Apple Trailers: {title}")
                         return result
                     last_error = f"Apple Trailers download failed for {source_name}"
-                
+
                 elif source_type == 'vimeo':
                     # Vimeo usually works without cookies
                     result = await self._download_with_ytdlp(
@@ -1147,6 +1478,7 @@ class TrailerDownloader:
             'sleep_interval': 1,  # Small delay to avoid rate limiting
             'max_sleep_interval': 3,
             'noprogress': True,  # Suppress progress output
+            'remote_components': ['ejs:github'],  # Required for YouTube JS challenge solving
         }
         
         # Add duration filter if max_duration is set

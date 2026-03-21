@@ -366,7 +366,9 @@ def ensure_schema() -> None:
                 _sqlite_add_column("settings", "nexup_include_unmonitored_movies BOOLEAN DEFAULT 0")
             if not _sqlite_has_column("settings", "nexup_include_unmonitored_shows"):
                 _sqlite_add_column("settings", "nexup_include_unmonitored_shows BOOLEAN DEFAULT 0")
-            
+            if not _sqlite_has_column("settings", "nexup_digital_theater_enabled"):
+                _sqlite_add_column("settings", "nexup_digital_theater_enabled BOOLEAN DEFAULT 1")
+
             # Settings: NeX-Up release date preference
             if not _sqlite_has_column("settings", "nexup_release_date_preference"):
                 _sqlite_add_column("settings", "nexup_release_date_preference TEXT DEFAULT 'digital_first'")
@@ -14627,6 +14629,7 @@ def get_nexup_settings(user: models.User = Depends(require_auth), db: Session = 
         # Unmonitored content settings
         "include_unmonitored_movies": getattr(setting, 'nexup_include_unmonitored_movies', False),
         "include_unmonitored_shows": getattr(setting, 'nexup_include_unmonitored_shows', False),
+        "digital_theater_enabled": getattr(setting, 'nexup_digital_theater_enabled', True),
         # Coming Soon List auto-regeneration settings
         "coming_soon_list_auto_regen": getattr(setting, 'nexup_coming_soon_list_auto_regen', False),
         "coming_soon_list_auto_regen_layout": getattr(setting, 'nexup_coming_soon_list_auto_regen_layout', 'both'),
@@ -14816,6 +14819,9 @@ def update_nexup_settings(
         setting.nexup_include_unmonitored_movies = include_unmonitored_movies
     if include_unmonitored_shows is not None:
         setting.nexup_include_unmonitored_shows = include_unmonitored_shows
+    digital_theater_enabled = data.get('digital_theater_enabled')
+    if digital_theater_enabled is not None:
+        setting.nexup_digital_theater_enabled = digital_theater_enabled
     # Coming Soon List auto-regeneration settings
     if coming_soon_list_auto_regen is not None:
         setting.nexup_coming_soon_list_auto_regen = coming_soon_list_auto_regen

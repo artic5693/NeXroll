@@ -293,6 +293,7 @@ class Setting(Base):
     nexup_max_trailer_duration = Column(Integer, default=180)  # Maximum trailer duration in seconds (0 = no limit)
     nexup_include_unmonitored_movies = Column(Boolean, default=False)  # Include unmonitored movies from Radarr
     nexup_include_unmonitored_shows = Column(Boolean, default=False)  # Include unmonitored TV shows from Sonarr
+    nexup_digital_theater_enabled = Column(Boolean, default=True)  # Use The Digital Theater for 4K lossless trailers
     
     # Release Date Preference - determines which date is shown/used for "Coming Soon"
     # Options: 'digital_first' (default), 'digital_only', 'physical_first', 'theatrical'
