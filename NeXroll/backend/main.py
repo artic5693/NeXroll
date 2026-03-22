@@ -1832,7 +1832,7 @@ else:
     # Allow localhost and RFC-1918 private ranges only
     app.add_middleware(
         CORSMiddleware,
-        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$",
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|[\w-]+\.(internal|local|lan|home))(:\d+)?$",
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -1842,7 +1842,8 @@ else:
 _CSRF_RFC1918_RE = re.compile(
     r'^https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}'
     r'|10\.\d{1,3}\.\d{1,3}\.\d{1,3}'
-    r'|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})(:\d+)?$'
+    r'|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}'
+    r'|[\w-]+\.(internal|local|lan|home))(:\d+)?$'
 )
 _CSRF_EXEMPT_PREFIXES = ('/plugin/', '/jellyfin/plugin/', '/emby/plugin/')
 
