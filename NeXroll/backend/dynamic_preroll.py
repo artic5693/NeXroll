@@ -1474,10 +1474,12 @@ class DynamicPrerollGenerator:
         custom_audio_path: str = None,
         custom_logo_path: str = None,
         logo_mode: str = "watermark",
-        language: str = 'en'
+        language: str = 'en',
+        header_text: str = "COMING SOON",
+        date_label: str = None
     ) -> Optional[str]:
-        """Generate a Coming Soon List video.
-        
+        """Generate a list video (Coming Soon, Recently Added, etc.).
+
         Args:
             items: List of dicts with 'title', 'release_date', 'poster_url' (optional)
             server_name: Server name to display in header
@@ -1491,7 +1493,9 @@ class DynamicPrerollGenerator:
             height: Video height
             max_items: Maximum number of items to show
             include_audio: Whether to include background music
-            
+            header_text: Header text displayed at top (e.g. "COMING SOON", "RECENTLY ADDED")
+            date_label: Optional prefix for date display (e.g. "Added" -> "Added Mar 15")
+
         Returns:
             Path to generated video or None on failure
         """
@@ -1524,7 +1528,9 @@ class DynamicPrerollGenerator:
                 custom_audio_path=custom_audio_path,
                 custom_logo_path=custom_logo_path,
                 logo_mode=logo_mode,
-                language=language
+                language=language,
+                header_text=header_text,
+                date_label=date_label
             )
         else:
             return self._generate_list_text_layout(
@@ -1534,7 +1540,9 @@ class DynamicPrerollGenerator:
                 custom_audio_path=custom_audio_path,
                 custom_logo_path=custom_logo_path,
                 logo_mode=logo_mode,
-                language=language
+                language=language,
+                header_text=header_text,
+                date_label=date_label
             )
     
     def _generate_list_text_layout(
@@ -1552,7 +1560,9 @@ class DynamicPrerollGenerator:
         custom_audio_path: str = None,
         custom_logo_path: str = None,
         logo_mode: str = "watermark",
-        language: str = 'en'
+        language: str = 'en',
+        header_text: str = "COMING SOON",
+        date_label: str = None
     ) -> Optional[str]:
         """Generate text-only list layout (no posters)"""
         output_path = self.output_dir / output_filename
@@ -1592,17 +1602,25 @@ class DynamicPrerollGenerator:
         # Build filter string
         filter_parts = []
         
-        # Header: "Coming Soon to [Server Name]" or "COMING SOON TO" + logo
+        # Header: "[header_text] to [Server Name]" or "[header_text] TO" + logo.
+        # Non-default header_text (e.g. "RECENTLY ADDED") is used verbatim;
+        # the default "COMING SOON" still goes through _get_text for i18n.
+        if header_text and header_text != "COMING SOON":
+            escaped_header = self._escape_text(header_text)
+            header_to_line = f"{escaped_header} TO"
+        else:
+            escaped_header = coming_soon_text
+            header_to_line = coming_soon_to_text
         has_replace_logo = logo_mode in ('right', 'below', 'replace') and custom_logo_path and os.path.isfile(custom_logo_path)
         if has_replace_logo:
-            # Right/Below mode: single-line "COMING SOON TO" header, logo positioned separately
+            # Right/Below/Replace mode: single-line header, logo positioned separately
             filter_parts.append(
-                f"drawtext=text='{coming_soon_to_text}':fontsize=80:fontcolor={accent_color}{bold_font_param}:"
+                f"drawtext=text='{header_to_line}':fontsize=80:fontcolor={accent_color}{bold_font_param}:"
                 f"x=(w-text_w)/2:y={header_y}:shadowcolor=black@0.6:shadowx=2:shadowy=2"
             )
         else:
             filter_parts.append(
-                f"drawtext=text='{coming_soon_text}':fontsize=80:fontcolor={accent_color}{bold_font_param}:"
+                f"drawtext=text='{escaped_header}':fontsize=80:fontcolor={accent_color}{bold_font_param}:"
                 f"x=(w-text_w)/2:y={header_y}:shadowcolor=black@0.6:shadowx=2:shadowy=2"
             )
             filter_parts.append(
@@ -1627,9 +1645,11 @@ class DynamicPrerollGenerator:
                 try:
                     from datetime import datetime
                     dt = datetime.fromisoformat(release_date.replace('Z', '+00:00'))
-                    date_str = dt.strftime('%b %d %Y')
+                    formatted_date = dt.strftime('%b %d %Y')
+                    date_str = f"{date_label} {formatted_date}" if date_label else formatted_date
                 except:
-                    date_str = release_date[:10] if len(release_date) >= 10 else release_date
+                    raw = release_date[:10] if len(release_date) >= 10 else release_date
+                    date_str = f"{date_label} {raw}" if date_label else raw
             else:
                 date_str = "TBA"
             date_str = self._escape_text(date_str)
@@ -1691,7 +1711,9 @@ class DynamicPrerollGenerator:
         custom_audio_path: str = None,
         custom_logo_path: str = None,
         logo_mode: str = "watermark",
-        language: str = 'en'
+        language: str = 'en',
+        header_text: str = "COMING SOON",
+        date_label: str = None
     ) -> Optional[str]:
         """
         Generate grid layout with poster images.
@@ -1899,9 +1921,11 @@ class DynamicPrerollGenerator:
                     try:
                         from datetime import datetime
                         dt = datetime.fromisoformat(release_date.replace('Z', '+00:00'))
-                        date_str = dt.strftime('%b %d')
+                        formatted_date = dt.strftime('%b %d')
+                        date_str = f"{date_label} {formatted_date}" if date_label else formatted_date
                     except:
-                        date_str = release_date[:10] if len(release_date) >= 10 else release_date
+                        raw = release_date[:10] if len(release_date) >= 10 else release_date
+                        date_str = f"{date_label} {raw}" if date_label else raw
                 else:
                     date_str = "TBA"
                 date_str = self._escape_text(date_str)
@@ -1921,24 +1945,32 @@ class DynamicPrerollGenerator:
                 )
             
             # Add header text - optimized for 2-row layout with start_y=170
-            # Only show "to {server_name}" when logo_mode is watermark (or no logo available)
+            # Only show "to {server_name}" when logo_mode is watermark (or no logo available).
+            # Non-default header_text (e.g. "RECENTLY ADDED") is used verbatim; the
+            # default "COMING SOON" still goes through _get_text for i18n.
+            if header_text and header_text != "COMING SOON":
+                escaped_header = self._escape_text(header_text)
+                header_to_line = f"{escaped_header} TO"
+            else:
+                escaped_header = coming_soon_text
+                header_to_line = coming_soon_to_text
             has_replace_logo = logo_mode in ('right', 'below', 'replace') and custom_logo_path and os.path.isfile(custom_logo_path)
             if has_replace_logo:
                 if logo_mode == 'right':
-                    # Right mode: "COMING SOON TO" shifted left, logo placed to its right
+                    # Right mode: header shifted left, logo placed to its right
                     header_filter = (
-                        f"drawtext=text='{coming_soon_to_text}':fontsize=55:fontcolor={accent_color}{bold_font_param}:"
+                        f"drawtext=text='{header_to_line}':fontsize=55:fontcolor={accent_color}{bold_font_param}:"
                         f"x=(w-text_w)/2-80:y=50:shadowcolor=black@0.5:shadowx=2:shadowy=2"
                     )
                 else:
-                    # Below mode: "COMING SOON TO" centered, logo placed below
+                    # Below/replace mode: header centered, logo placed below/to the right
                     header_filter = (
-                        f"drawtext=text='{coming_soon_to_text}':fontsize=55:fontcolor={accent_color}{bold_font_param}:"
+                        f"drawtext=text='{header_to_line}':fontsize=55:fontcolor={accent_color}{bold_font_param}:"
                         f"x=(w-text_w)/2:y=50:shadowcolor=black@0.5:shadowx=2:shadowy=2"
                     )
             else:
                 header_filter = (
-                    f"drawtext=text='{coming_soon_text}':fontsize=55:fontcolor={accent_color}{bold_font_param}:"
+                    f"drawtext=text='{escaped_header}':fontsize=55:fontcolor={accent_color}{bold_font_param}:"
                     f"x=(w-text_w)/2:y=50:shadowcolor=black@0.5:shadowx=2:shadowy=2,"
                     f"drawtext=text='{to_text} {escaped_server}':fontsize=30:fontcolor={text_color}@0.9{font_param}:"
                     f"x=(w-text_w)/2:y=115"
@@ -1958,7 +1990,7 @@ class DynamicPrerollGenerator:
                 logo_input_index = len(poster_paths) + 1  # Next input after posters
                 cmd.extend(['-i', custom_logo_path])
                 if logo_mode == 'right':
-                    # Right mode: logo to the right of "COMING SOON TO" header
+                    # Right mode: logo to the right of the header
                     logo_h = 120  # Prominent size next to header
                     logo_opacity = 0.85
                     logo_x = f"(W/2)+200"
