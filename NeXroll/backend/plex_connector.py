@@ -249,7 +249,7 @@ class PlexConnector:
             token_preview = "<none>"
             try:
                 if self.token:
-                    token_preview = (self.token[:10] + "...") if len(self.token) > 10 else str(self.token)
+                    token_preview = ("..." + self.token[-4:]) if len(self.token) > 4 else "***"
             except Exception:
                 token_preview = "<error>"
 

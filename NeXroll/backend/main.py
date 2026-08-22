@@ -86,12 +86,45 @@ from backend.backup_utils import (
     remap_sequence_blocks,
     remap_sequence_json,
 )
-from backend.auth_gate import friendly_local_username, is_auth_gate_exempt
+from backend.auth_gate import (
+    AUTH_GATE_EXEMPT_PREFIXES,
+    friendly_local_username,
+    is_auth_gate_exempt,
+)
 
 models.Base.metadata.create_all(bind=engine)
 
+
+# --- Helpers: read API keys from secure_store with DB fallback ---
+def _get_radarr_api_key(setting) -> str | None:
+    """Get Radarr API key from secure store, falling back to DB column."""
+    key = secure_store.get_radarr_api_key()
+    if key:
+        return key
+    return getattr(setting, 'nexup_radarr_api_key', None) if setting else None
+
+
+def _get_sonarr_api_key(setting) -> str | None:
+    """Get Sonarr API key from secure store, falling back to DB column."""
+    key = secure_store.get_sonarr_api_key()
+    if key:
+        return key
+    return getattr(setting, 'nexup_sonarr_api_key', None) if setting else None
+
+
+def _get_tmdb_api_key(setting) -> str | None:
+    """Get TMDB API key from secure store, falling back to DB column."""
+    key = secure_store.get_tmdb_api_key()
+    if key:
+        return key
+    return getattr(setting, 'nexup_tmdb_api_key', None) if setting else None
+
 # Lightweight runtime schema upgrades for older SQLite databases
+_VALID_SQL_IDENT = re.compile(r'^[a-z_][a-z0-9_]*$')
+
 def _sqlite_has_column(table: str, column: str) -> bool:
+    if not _VALID_SQL_IDENT.match(table) or not _VALID_SQL_IDENT.match(column):
+        raise ValueError(f"Invalid SQL identifier: {table}.{column}")
     try:
         with engine.connect() as conn:
             res = conn.exec_driver_sql(f'PRAGMA table_info({table})')
@@ -102,6 +135,14 @@ def _sqlite_has_column(table: str, column: str) -> bool:
         return False
 
 def _sqlite_add_column(table: str, ddl: str) -> None:
+    # Validate table name; ddl is a column definition like "col_name TYPE DEFAULT val"
+    if not _VALID_SQL_IDENT.match(table):
+        raise ValueError(f"Invalid SQL table name: {table}")
+    col_name = ddl.strip().split()[0]
+    if not _VALID_SQL_IDENT.match(col_name):
+        raise ValueError(f"Invalid SQL column name in DDL: {ddl}")
+    if ';' in ddl:
+        raise ValueError(f"Suspicious DDL (contains semicolon): {ddl}")
     try:
         with engine.connect() as conn:
             conn.exec_driver_sql(f'ALTER TABLE {table} ADD COLUMN {ddl}')
@@ -704,6 +745,9 @@ def ensure_settings_schema_now() -> None:
             for col, ddl in need.items():
                 if col not in cols:
                     try:
+                        # Validate identifiers even though values are hardcoded (defense-in-depth)
+                        if not _VALID_SQL_IDENT.match(col):
+                            raise ValueError(f"Invalid column name: {col}")
                         conn.exec_driver_sql(f"ALTER TABLE settings ADD COLUMN {col} {ddl}")
                         added_columns.append(col)
                         try:
@@ -797,6 +841,9 @@ def _migrate_legacy_api_keys():
         for attr, ss_set, ss_has in (
             ("emby_api_key", secure_store.set_emby_api_key, secure_store.has_emby_api_key),
             ("jellyfin_api_key", secure_store.set_jellyfin_api_key, secure_store.has_jellyfin_api_key),
+            ("nexup_radarr_api_key", secure_store.set_radarr_api_key, secure_store.has_radarr_api_key),
+            ("nexup_sonarr_api_key", secure_store.set_sonarr_api_key, secure_store.has_sonarr_api_key),
+            ("nexup_tmdb_api_key", secure_store.set_tmdb_api_key, secure_store.has_tmdb_api_key),
         ):
             val = getattr(setting, attr, None)
             if val and str(val).strip():
@@ -1824,6 +1871,13 @@ def _normalize_url(url: str) -> str:
         u = str(url).strip()
         if not u.startswith(("http://", "https://")):
             u = "http://" + u
+        # Block cloud metadata / link-local SSRF targets
+        from urllib.parse import urlparse
+        host = urlparse(u).hostname or ""
+        _SSRF_BLOCKED = ('169.254.169.254', 'metadata.google.internal',
+                         'metadata.google', '100.100.100.200')
+        if host in _SSRF_BLOCKED or host.startswith('169.254.'):
+            return ""
         return u.rstrip("/")
     except Exception:
         return ""
@@ -2282,16 +2336,57 @@ def _build_plex_headers() -> dict:
         headers.setdefault("X-Plex-Client-Identifier", str(uuid.uuid4()))
     return headers
 
-# CORS middleware for frontend integration
-# allow_origin_regex also permits any Jellyfin/Emby web UI origin to reach /plugin/* routes.
-# The plugin endpoints use API-key auth so open CORS is safe.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=r".*",   # plugin routes need any origin; API key provides real security
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# CORS middleware — restrict to local/private origins by default.
+# Override with NEXROLL_CORS_ORIGINS env var (comma-separated) for plugin routes
+# that need open CORS (e.g., Jellyfin/Emby web UIs on non-standard origins).
+# NOTE: deliberately NOT a wildcard regex — /plugin/* routes are exempted from
+# CSRF checks below and rely on their own API-key auth, but a global wildcard
+# CORS policy would also open every non-plugin route (uploads, deletes,
+# settings) to any origin, which is not something API-key auth on a different
+# route family protects against.
+_cors_env = os.environ.get("NEXROLL_CORS_ORIGINS", "").strip()
+if _cors_env:
+    _cors_origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_cors_origins,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    # Allow localhost and RFC-1918 private ranges only
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|[\w-]+\.(internal|local|lan|home))(:\d+)?$",
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+# CSRF protection: verify Origin/Referer for state-changing requests.
+# Reuses AUTH_GATE_EXEMPT_PREFIXES (plugin routes) so the two middlewares don't
+# maintain separate exemption lists that can drift out of sync.
+_CSRF_RFC1918_RE = re.compile(
+    r'^https?://(localhost|127\.0\.0\.1|192\.168\.\d{1,3}\.\d{1,3}'
+    r'|10\.\d{1,3}\.\d{1,3}\.\d{1,3}'
+    r'|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}'
+    r'|[\w-]+\.(internal|local|lan|home))(:\d+)?$'
 )
+
+@app.middleware("http")
+async def _csrf_check_mw(request, call_next):
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return await call_next(request)
+    # Exempt plugin routes (called by Jellyfin/Emby servers)
+    if request.url.path.startswith(AUTH_GATE_EXEMPT_PREFIXES):
+        return await call_next(request)
+    origin = request.headers.get("origin") or request.headers.get("referer") or ""
+    # Allow requests with no Origin (non-browser clients like curl/Postman)
+    if origin and not _CSRF_RFC1918_RE.match(origin):
+        from starlette.responses import JSONResponse
+        return JSONResponse(status_code=403, content={"detail": "Cross-origin request blocked"})
+    return await call_next(request)
 
 # ---------------------------------------------------------------------------
 # Global auth gate
@@ -6900,6 +6995,9 @@ def collect_sensitive_values(db) -> set:
         secure_store.get_plex_token,
         secure_store.get_jellyfin_api_key,
         secure_store.get_emby_api_key,
+        secure_store.get_radarr_api_key,
+        secure_store.get_sonarr_api_key,
+        secure_store.get_tmdb_api_key,
     ):
         try:
             v = getter()
@@ -14688,10 +14786,18 @@ def browse_folders(req: BrowseFolderRequest):
     If path is empty, returns available drives (Windows) or root directories.
     """
     import string
-    
+
     path = (req.path or "").strip()
-    
+
+    # Security: block access to sensitive directories
+    _BLOCKED_PREFIXES = ('/proc', '/sys', '/dev', '/run', '/boot', '/root', '/etc')
+
     try:
+        if path:
+            norm = os.path.realpath(path)
+            if any(norm == bp or norm.startswith(bp + '/') for bp in _BLOCKED_PREFIXES):
+                raise HTTPException(status_code=403, detail="Access to this directory is not allowed")
+
         # If no path provided, return drive list (Windows) or root (Unix)
         if not path:
             if sys.platform.startswith("win"):
@@ -18244,7 +18350,7 @@ def get_nexup_settings(user: models.User = Depends(require_auth), db: Session = 
     return {
         "enabled": getattr(setting, 'nexup_enabled', False),
         "radarr_url": getattr(setting, 'nexup_radarr_url', None),
-        "radarr_connected": bool(getattr(setting, 'nexup_radarr_url', None) and getattr(setting, 'nexup_radarr_api_key', None)),
+        "radarr_connected": bool(getattr(setting, 'nexup_radarr_url', None) and _get_radarr_api_key(setting)),
         "storage_path": getattr(setting, 'nexup_storage_path', None),
         "quality": getattr(setting, 'nexup_quality', '1080'),
         "days_ahead": getattr(setting, 'nexup_days_ahead', 90),
@@ -18260,11 +18366,11 @@ def get_nexup_settings(user: models.User = Depends(require_auth), db: Session = 
         "download_delay": getattr(setting, 'nexup_download_delay', 5),
         "max_concurrent": getattr(setting, 'nexup_max_concurrent', 1),
         "bulk_warning_threshold": getattr(setting, 'nexup_bulk_warning_threshold', 5),
-        "tmdb_api_key": getattr(setting, 'nexup_tmdb_api_key', None),
+        "tmdb_api_key": _get_tmdb_api_key(setting),
         # Sonarr settings
         "sonarr_enabled": getattr(setting, 'nexup_sonarr_enabled', False),
         "sonarr_url": getattr(setting, 'nexup_sonarr_url', None),
-        "sonarr_connected": bool(getattr(setting, 'nexup_sonarr_url', None) and getattr(setting, 'nexup_sonarr_api_key', None)),
+        "sonarr_connected": bool(getattr(setting, 'nexup_sonarr_url', None) and _get_sonarr_api_key(setting)),
         "tv_category_id": getattr(setting, 'nexup_tv_category_id', None),
         "last_sonarr_sync": last_sonarr.isoformat() if last_sonarr else None,
         "next_sonarr_sync": next_sonarr,
@@ -18439,7 +18545,11 @@ def update_nexup_settings(
     if bulk_warning_threshold is not None:
         setting.nexup_bulk_warning_threshold = max(1, min(50, bulk_warning_threshold))  # 1-50 trailers
     if tmdb_api_key is not None:
-        setting.nexup_tmdb_api_key = tmdb_api_key if tmdb_api_key.strip() else None
+        if tmdb_api_key.strip():
+            secure_store.set_tmdb_api_key(tmdb_api_key.strip())
+        else:
+            secure_store.delete_tmdb_api_key()
+        setting.nexup_tmdb_api_key = None
     # Unmonitored content settings
     if include_unmonitored_movies is not None:
         setting.nexup_include_unmonitored_movies = include_unmonitored_movies
@@ -18531,10 +18641,11 @@ async def connect_radarr(
                 db.refresh(setting)
             
             setting.nexup_radarr_url = url
-            setting.nexup_radarr_api_key = api_key
+            setting.nexup_radarr_api_key = None  # stored in secure_store
+            secure_store.set_radarr_api_key(api_key)
             setting.updated_at = datetime.datetime.utcnow()
             db.commit()
-            
+
             _file_log(f"Radarr connected: {result.get('appName')} v{result.get('version')}")
             log_event('INFO', 'nexup', f'Radarr connected: {result.get("appName")} v{result.get("version")}', source='connect_radarr')
             return {
@@ -18564,9 +18675,10 @@ def disconnect_radarr(db: Session = Depends(get_db)):
     if setting:
         setting.nexup_radarr_url = None
         setting.nexup_radarr_api_key = None
+        secure_store.delete_radarr_api_key()
         setting.updated_at = datetime.datetime.utcnow()
         db.commit()
-    
+
     _file_log("Radarr disconnected")
     log_event('INFO', 'nexup', 'Radarr disconnected', source='disconnect_radarr')
     return {"success": True, "message": "Radarr disconnected"}
@@ -18575,12 +18687,12 @@ def disconnect_radarr(db: Session = Depends(get_db)):
 async def get_upcoming_movies(db: Session = Depends(get_db)):
     """Get list of upcoming movies from Radarr"""
     setting = db.query(models.Setting).first()
-    if not setting or not setting.nexup_radarr_url or not setting.nexup_radarr_api_key:
+    if not setting or not setting.nexup_radarr_url or not _get_radarr_api_key(setting):
         raise HTTPException(status_code=400, detail="Radarr not connected")
     
     from backend.radarr_connector import RadarrConnector
     
-    connector = RadarrConnector(setting.nexup_radarr_url, setting.nexup_radarr_api_key)
+    connector = RadarrConnector(setting.nexup_radarr_url, _get_radarr_api_key(setting))
     days_ahead = getattr(setting, 'nexup_days_ahead', 90) or 90
     include_unmonitored = getattr(setting, 'nexup_include_unmonitored_movies', False)
     release_date_preference = getattr(setting, 'nexup_release_date_preference', 'digital_first')
@@ -18636,12 +18748,12 @@ async def get_upcoming_movies(db: Session = Depends(get_db)):
 async def debug_radarr_movie(radarr_id: int, db: Session = Depends(get_db)):
     """Debug endpoint to see raw Radarr movie data including trailer info"""
     setting = db.query(models.Setting).first()
-    if not setting or not setting.nexup_radarr_url or not setting.nexup_radarr_api_key:
+    if not setting or not setting.nexup_radarr_url or not _get_radarr_api_key(setting):
         raise HTTPException(status_code=400, detail="Radarr not connected")
     
     from backend.radarr_connector import RadarrConnector
     
-    connector = RadarrConnector(setting.nexup_radarr_url, setting.nexup_radarr_api_key)
+    connector = RadarrConnector(setting.nexup_radarr_url, _get_radarr_api_key(setting))
     movie = await connector.get_movie_by_id(radarr_id)
     
     if not movie:
@@ -18699,7 +18811,8 @@ async def connect_sonarr(
                 db.refresh(setting)
             
             setting.nexup_sonarr_url = url
-            setting.nexup_sonarr_api_key = api_key
+            setting.nexup_sonarr_api_key = None  # stored in secure_store
+            secure_store.set_sonarr_api_key(api_key)
             setting.nexup_sonarr_enabled = True
             setting.updated_at = datetime.datetime.utcnow()
             db.commit()
@@ -18733,6 +18846,7 @@ def disconnect_sonarr(db: Session = Depends(get_db)):
     if setting:
         setting.nexup_sonarr_url = None
         setting.nexup_sonarr_api_key = None
+        secure_store.delete_sonarr_api_key()
         setting.nexup_sonarr_enabled = False
         setting.updated_at = datetime.datetime.utcnow()
         db.commit()
@@ -18745,14 +18859,14 @@ def disconnect_sonarr(db: Session = Depends(get_db)):
 async def get_upcoming_shows(db: Session = Depends(get_db)):
     """Get list of upcoming TV show premieres from Sonarr"""
     setting = db.query(models.Setting).first()
-    if not setting or not getattr(setting, 'nexup_sonarr_url', None) or not getattr(setting, 'nexup_sonarr_api_key', None):
+    if not setting or not getattr(setting, 'nexup_sonarr_url', None) or not _get_sonarr_api_key(setting):
         _file_log("Sonarr: Get upcoming shows failed - not connected")
         raise HTTPException(status_code=400, detail="Sonarr not connected")
     
     from backend.sonarr_connector import SonarrConnector
     
     _file_log(f"Sonarr: Fetching upcoming shows from {setting.nexup_sonarr_url}")
-    connector = SonarrConnector(setting.nexup_sonarr_url, setting.nexup_sonarr_api_key)
+    connector = SonarrConnector(setting.nexup_sonarr_url, _get_sonarr_api_key(setting))
     days_ahead = getattr(setting, 'nexup_days_ahead', 90) or 90
     include_unmonitored = getattr(setting, 'nexup_include_unmonitored_shows', False)
     
@@ -18861,7 +18975,7 @@ async def search_tv_trailers(sonarr_series_id: int, season_number: int = 1, db: 
     from backend.sonarr_connector import SonarrConnector
     from backend.radarr_connector import search_youtube_trailers
     try:
-        connector = SonarrConnector(setting.nexup_sonarr_url, setting.nexup_sonarr_api_key)
+        connector = SonarrConnector(setting.nexup_sonarr_url, _get_sonarr_api_key(setting))
         all_series = await connector.get_all_series()
         show = next((s for s in all_series if s.get('id') == sonarr_series_id), None)
         if not show:
@@ -18926,7 +19040,7 @@ async def download_tv_trailer(
     from backend.radarr_connector import TrailerDownloader
     
     # Get show info from Sonarr
-    connector = SonarrConnector(setting.nexup_sonarr_url, setting.nexup_sonarr_api_key)
+    connector = SonarrConnector(setting.nexup_sonarr_url, _get_sonarr_api_key(setting))
     all_series = await connector.get_all_series()
     
     show_info = None
@@ -18942,7 +19056,7 @@ async def download_tv_trailer(
     _file_log(f"Sonarr: Found show '{show_info.get('title')}' (TVDB: {show_info.get('tvdbId')}, IMDB: {show_info.get('imdbId')})")
     
     # Get trailer URL from TMDB or IMDB (skipped when the caller chose an alternate)
-    tmdb_api_key = getattr(setting, 'nexup_tmdb_api_key', None)
+    tmdb_api_key = _get_tmdb_api_key(setting)
     trailers = []
     if not trailer_url:
         fetcher = TVTrailerFetcher(tmdb_api_key=tmdb_api_key)
@@ -19244,9 +19358,9 @@ async def _auto_regenerate_coming_soon_list(db: Session):
         
         # Get movies from Radarr API
         if source in ["movies", "both"]:
-            if setting.nexup_radarr_url and setting.nexup_radarr_api_key:
+            if setting.nexup_radarr_url and _get_radarr_api_key(setting):
                 try:
-                    radarr_connector = RadarrConnector(setting.nexup_radarr_url, setting.nexup_radarr_api_key)
+                    radarr_connector = RadarrConnector(setting.nexup_radarr_url, _get_radarr_api_key(setting))
                     release_date_pref = getattr(setting, 'nexup_release_date_preference', 'digital_first')
                     movies = await radarr_connector.get_upcoming_movies(days_ahead, release_date_preference=release_date_pref)
                     for movie in movies:
@@ -19272,9 +19386,9 @@ async def _auto_regenerate_coming_soon_list(db: Session):
         
         # Get shows from Sonarr API
         if source in ["shows", "both"]:
-            if getattr(setting, 'nexup_sonarr_url', None) and getattr(setting, 'nexup_sonarr_api_key', None):
+            if getattr(setting, 'nexup_sonarr_url', None) and _get_sonarr_api_key(setting):
                 try:
-                    sonarr_connector = SonarrConnector(setting.nexup_sonarr_url, setting.nexup_sonarr_api_key)
+                    sonarr_connector = SonarrConnector(setting.nexup_sonarr_url, _get_sonarr_api_key(setting))
                     include_unmonitored_shows = getattr(setting, 'nexup_include_unmonitored_shows', False)
                     shows = await sonarr_connector.get_upcoming_premieres(days_ahead, include_unmonitored=include_unmonitored_shows)
                     for show in shows:
@@ -19461,7 +19575,7 @@ async def sync_sonarr_trailers(db: Session = Depends(get_db)):
     from backend.sonarr_connector import SonarrConnector, TVTrailerFetcher
     from backend.radarr_connector import TrailerDownloader
     
-    connector = SonarrConnector(setting.nexup_sonarr_url, setting.nexup_sonarr_api_key)
+    connector = SonarrConnector(setting.nexup_sonarr_url, _get_sonarr_api_key(setting))
     days_ahead = getattr(setting, 'nexup_days_ahead', 90) or 90
     max_trailers = getattr(setting, 'nexup_max_trailers', 10)
     if max_trailers is None:
@@ -19581,7 +19695,7 @@ async def sync_sonarr_trailers(db: Session = Depends(get_db)):
     existing_keys = {f"{t.sonarr_series_id}_S{t.season_number}" for t in existing_trailers}
     
     # Find shows that need trailers
-    tmdb_api_key = getattr(setting, 'nexup_tmdb_api_key', None)
+    tmdb_api_key = _get_tmdb_api_key(setting)
     fetcher = TVTrailerFetcher(tmdb_api_key=tmdb_api_key)
     quality = getattr(setting, 'nexup_quality', '1080') or '1080'
     max_duration = getattr(setting, 'nexup_max_trailer_duration', 180) or 0
@@ -20772,11 +20886,11 @@ async def search_movie_trailers(radarr_movie_id: int, db: Session = Depends(get_
     """Find alternate YouTube trailers for a Radarr movie (top 3) so the user can
     preview and pick one when the default trailer is unavailable."""
     setting = db.query(models.Setting).first()
-    if not setting or not setting.nexup_radarr_url or not setting.nexup_radarr_api_key:
+    if not setting or not setting.nexup_radarr_url or not _get_radarr_api_key(setting):
         raise HTTPException(status_code=400, detail="Radarr not connected")
     from backend.radarr_connector import RadarrConnector, search_youtube_trailers
     try:
-        connector = RadarrConnector(setting.nexup_radarr_url, setting.nexup_radarr_api_key)
+        connector = RadarrConnector(setting.nexup_radarr_url, _get_radarr_api_key(setting))
         movie = await connector.get_movie_by_id(radarr_movie_id)
         if not movie:
             raise HTTPException(status_code=404, detail="Movie not found in Radarr")
@@ -20809,7 +20923,7 @@ async def download_trailer(radarr_movie_id: int, trailer_url: Optional[str] = No
     """
     
     setting = db.query(models.Setting).first()
-    if not setting or not setting.nexup_radarr_url or not setting.nexup_radarr_api_key:
+    if not setting or not setting.nexup_radarr_url or not _get_radarr_api_key(setting):
         raise HTTPException(status_code=400, detail="Radarr not connected")
     
     storage_path = getattr(setting, 'nexup_storage_path', None)
@@ -20836,7 +20950,7 @@ async def download_trailer(radarr_movie_id: int, trailer_url: Optional[str] = No
     
     try:
         # Get movie details from Radarr
-        connector = RadarrConnector(setting.nexup_radarr_url, setting.nexup_radarr_api_key)
+        connector = RadarrConnector(setting.nexup_radarr_url, _get_radarr_api_key(setting))
         movie = await connector.get_movie_by_id(radarr_movie_id)
         
         if not movie:
@@ -21285,7 +21399,7 @@ async def sync_nexup(db: Session = Depends(get_db)):
         return {"success": False, "message": "Sync already in progress", "skipped": True}
 
     setting = db.query(models.Setting).first()
-    if not setting or not setting.nexup_radarr_url or not setting.nexup_radarr_api_key:
+    if not setting or not setting.nexup_radarr_url or not _get_radarr_api_key(setting):
         raise HTTPException(status_code=400, detail="Radarr not connected")
     
     storage_path = getattr(setting, 'nexup_storage_path', None)
@@ -21307,7 +21421,7 @@ async def sync_nexup(db: Session = Depends(get_db)):
     
     from backend.radarr_connector import RadarrConnector, TrailerDownloader
     
-    connector = RadarrConnector(setting.nexup_radarr_url, setting.nexup_radarr_api_key)
+    connector = RadarrConnector(setting.nexup_radarr_url, _get_radarr_api_key(setting))
     max_duration = getattr(setting, 'nexup_max_trailer_duration', 180) or 0
     
     # Debug: Log storage path and cookie file status
@@ -22221,9 +22335,9 @@ async def generate_coming_soon_list(
     
     # Get movies from Radarr API
     if source in ["movies", "both"]:
-        if setting.nexup_radarr_url and setting.nexup_radarr_api_key:
+        if setting.nexup_radarr_url and _get_radarr_api_key(setting):
             try:
-                radarr_connector = RadarrConnector(setting.nexup_radarr_url, setting.nexup_radarr_api_key)
+                radarr_connector = RadarrConnector(setting.nexup_radarr_url, _get_radarr_api_key(setting))
                 release_date_pref = getattr(setting, 'nexup_release_date_preference', 'digital_first')
                 movies = await radarr_connector.get_upcoming_movies(days_ahead, release_date_preference=release_date_pref)
                 for movie in movies:
@@ -22251,9 +22365,9 @@ async def generate_coming_soon_list(
     
     # Get shows from Sonarr API
     if source in ["shows", "both"]:
-        if getattr(setting, 'nexup_sonarr_url', None) and getattr(setting, 'nexup_sonarr_api_key', None):
+        if getattr(setting, 'nexup_sonarr_url', None) and _get_sonarr_api_key(setting):
             try:
-                sonarr_connector = SonarrConnector(setting.nexup_sonarr_url, setting.nexup_sonarr_api_key)
+                sonarr_connector = SonarrConnector(setting.nexup_sonarr_url, _get_sonarr_api_key(setting))
                 include_unmonitored_shows = getattr(setting, 'nexup_include_unmonitored_shows', False)
                 shows = await sonarr_connector.get_upcoming_premieres(days_ahead, include_unmonitored=include_unmonitored_shows)
                 for show in shows:
@@ -22466,9 +22580,9 @@ async def preview_coming_soon_list(
     
     # Get movies from Radarr API
     if source in ["movies", "both"]:
-        if setting.nexup_radarr_url and setting.nexup_radarr_api_key:
+        if setting.nexup_radarr_url and _get_radarr_api_key(setting):
             try:
-                radarr_connector = RadarrConnector(setting.nexup_radarr_url, setting.nexup_radarr_api_key)
+                radarr_connector = RadarrConnector(setting.nexup_radarr_url, _get_radarr_api_key(setting))
                 release_date_pref = getattr(setting, 'nexup_release_date_preference', 'digital_first')
                 movies = await radarr_connector.get_upcoming_movies(days_ahead, release_date_preference=release_date_pref)
                 for movie in movies:
@@ -22485,9 +22599,9 @@ async def preview_coming_soon_list(
     
     # Get shows from Sonarr API
     if source in ["shows", "both"]:
-        if getattr(setting, 'nexup_sonarr_url', None) and getattr(setting, 'nexup_sonarr_api_key', None):
+        if getattr(setting, 'nexup_sonarr_url', None) and _get_sonarr_api_key(setting):
             try:
-                sonarr_connector = SonarrConnector(setting.nexup_sonarr_url, setting.nexup_sonarr_api_key)
+                sonarr_connector = SonarrConnector(setting.nexup_sonarr_url, _get_sonarr_api_key(setting))
                 include_unmonitored_shows = getattr(setting, 'nexup_include_unmonitored_shows', False)
                 shows = await sonarr_connector.get_upcoming_premieres(days_ahead, include_unmonitored=include_unmonitored_shows)
                 for show in shows:
@@ -27522,8 +27636,8 @@ def get_dashboard_stats(db: Session = Depends(get_db)):
         
         if setting:
             nexup_stats["enabled"] = getattr(setting, 'nexup_enabled', False) or getattr(setting, 'nexup_sonarr_enabled', False)
-            nexup_stats["radarr_connected"] = bool(getattr(setting, 'nexup_radarr_url', None) and getattr(setting, 'nexup_radarr_api_key', None))
-            nexup_stats["sonarr_connected"] = bool(getattr(setting, 'nexup_sonarr_url', None) and getattr(setting, 'nexup_sonarr_api_key', None))
+            nexup_stats["radarr_connected"] = bool(getattr(setting, 'nexup_radarr_url', None) and _get_radarr_api_key(setting))
+            nexup_stats["sonarr_connected"] = bool(getattr(setting, 'nexup_sonarr_url', None) and _get_sonarr_api_key(setting))
             nexup_stats["storage_limit_gb"] = getattr(setting, 'nexup_max_storage_gb', 5.0) or 5.0
             
             # Count trailers by category
