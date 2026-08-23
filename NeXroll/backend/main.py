@@ -13286,7 +13286,7 @@ def _build_sequence_export(sequence_name, sequence_description, blocks, export_m
 @app.post("/sequences/{sequence_id}/export")
 def export_sequence_pattern(
     sequence_id: int,
-    export_mode: str = Query("pattern_only", regex="^(pattern_only|with_community_ids|with_preroll_data|full_bundle)$"),
+    export_mode: str = Query("pattern_only", pattern="^(pattern_only|with_community_ids|with_preroll_data|full_bundle)$"),
     db: Session = Depends(get_db)
 ):
     """Export a saved sequence as a .nexseq pattern file (or full-bundle ZIP)."""
@@ -20110,7 +20110,11 @@ def get_youtube_status(db: Session = Depends(get_db)):
     
     # Check for browser cookies
     from backend.radarr_connector import TrailerDownloader
-    downloader = TrailerDownloader(storage_path, '1080')
+    try:
+        downloader = TrailerDownloader(storage_path, '1080')
+    except (PermissionError, OSError):
+        status['message'] = "YouTube status unavailable: storage path not accessible"
+        return status
     browser = downloader.get_cookie_browser()
     
     if browser:
@@ -21806,10 +21810,15 @@ def get_nexup_storage(db: Session = Depends(get_db)):
         }
     
     from backend.radarr_connector import TrailerDownloader
-    
-    downloader = TrailerDownloader(storage_path)
-    usage = downloader.get_storage_usage()
-    
+
+    try:
+        downloader = TrailerDownloader(storage_path)
+        usage = downloader.get_storage_usage()
+    except PermissionError:
+        raise HTTPException(status_code=400, detail=f"Permission denied: cannot access storage path '{storage_path}'")
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid storage path '{storage_path}': {e}")
+
     return {
         "configured": True,
         "path": storage_path,
@@ -26142,9 +26151,13 @@ def _build_prerolls_index(progress_callback=None, base_url=None) -> dict:
                         _file_log(f"  Found: {title[:60]}")
         except json.JSONDecodeError as e:
             _file_log(f"JSON parse error for {url}: {e}")
+        except requests.exceptions.Timeout:
+            _file_log(f"Timeout after 10s fetching {url}")
+        except requests.exceptions.ConnectionError as e:
+            _file_log(f"Connection error for {url}: {e}")
         except Exception as e:
             import traceback
-            _file_log(f"Error indexing {url}: {e}")
+            _file_log(f"Error indexing {url}: {type(e).__name__}: {e}")
             _file_log(f"  Traceback: {traceback.format_exc()}")
     
     # Build the index by scraping from root to discover all folders
@@ -26392,11 +26405,13 @@ def build_community_prerolls_index(request: Request, db: Session = Depends(get_d
                 _index_build_progress["message"] = "Failed to save index to disk"
                 _file_log("Community index build: failed to save index to disk")
         except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
             _index_build_progress["building"] = False
-            _index_build_progress["message"] = f"Build failed: {e}"
-            _file_log(f"Error building prerolls index: {e}")
+            _index_build_progress["message"] = f"Build failed: {type(e).__name__}: {e}"
+            _file_log(f"Error building prerolls index: {type(e).__name__}: {e}\n{tb}")
             try:
-                log_event('ERROR', 'system', f'Community index build failed: {e}', source='build_community_index')
+                log_event('ERROR', 'system', f'Community index build failed: {type(e).__name__}: {e}', source='build_community_index', details={"traceback": tb})
             except Exception:
                 pass
         finally:
