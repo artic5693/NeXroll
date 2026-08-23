@@ -31,8 +31,8 @@ ssh -i ~/.ssh/unraid root@192.168.1.219 "docker pull ghcr.io/artic5693/nexroll:l
 
 | Container Path | Host Path | Purpose |
 |---------------|-----------|---------|
-| `/data` | `/mnt/cache/appdata/nexroll` | DB, logs, secrets |
-| `/prerolls` | `/mnt/cache/data/media/movies/preroll` | Preroll video files |
+| `/data` | `/mnt/user/appdata/nexroll` | DB, logs, secrets |
+| `/prerolls` | `/mnt/user/data/media/movies/preroll` | Preroll video files |
 
 ## Environment Variables
 
@@ -71,11 +71,30 @@ Trailers are downloaded in priority order (highest quality first):
 
 ## Fork Changes
 
-This fork (`artic5693/NeXroll`) adds:
-- PUID/PGID support in entrypoint for Unraid permission handling
-- CORS restriction and API key migration (security hardening)
-- GHCR CI workflow for automated image builds
-- Unraid template pointing to fork's GHCR registry
-- The Digital Theater as highest-priority trailer source (4K lossless)
+This fork (`artic5693/NeXroll`) adds, on top of a rewritten upstream base
+(reconciled to v2.1.0-beta.2 — the dashboard redesign, global session auth
+gate, and bgutil PO-token YouTube fix are all upstream's, not fork-original):
+- PUID/PGID support via `entrypoint.sh` for Unraid permission handling —
+  upstream runs as root with no entrypoint at all
+- CORS restriction (anchored LAN/localhost regex, not upstream's wildcard)
+  + a dedicated CSRF origin-check middleware upstream doesn't have
+- Radarr/Sonarr/TMDB API keys migrated into `secure_store` (upstream's
+  secure_store only covers Plex/Jellyfin/Emby)
+- ZipSlip/SSRF/SQL-injection guards and Jellyfin/Emby plugin XSS fixes not
+  present upstream (some overlapping fixes, e.g. ZipSlip, upstream already
+  had independently — checked case by case rather than blindly reapplied)
+- "Recently Added" NeX-Up list — mirrors Coming Soon List, generates a
+  preroll video of recently-added library content (Radarr/Sonarr `dateAdded`/
+  history), with its own exclude/include toggle and Generator tab
+- The Digital Theater as highest-priority (-2) trailer source (4K lossless,
+  above Radarr YouTube at -1) — complementary to upstream's PO-token fix,
+  not a replacement for it
+- Log directory falls back to `$NEXROLL_DB_DIR/logs` before the app's cwd —
+  needed because the cwd (`/app/NeXroll`) is root-owned under PUID/PGID,
+  upstream never hits this since they run as root
+- GHCR CI workflow (push-to-main + workflow_dispatch) and Unraid template
+  pointing at the fork's registry, kept independent of upstream's Docker
+  Hub / release-triggered workflow
 - yt-dlp JS challenge solver integration (`remote_components: ejs:github`)
-- Format string fallback for unavailable resolutions
+- Format string fallback for unavailable resolutions (upstream independently
+  carries an equivalent/newer H.264-preferring fix)
