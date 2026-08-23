@@ -83,6 +83,7 @@ RUN apt-get update && \
         curl \
         unzip \
         tzdata \
+        gosu \
         # DejaVu + Liberation fonts so FFmpeg drawtext can render extended-Latin
         # glyphs (German umlauts ä/ö/ü, accents, etc.) in generated prerolls /
         # Coming Soon lists. Without a real fontfile, drawtext falls back to a
@@ -93,9 +94,15 @@ RUN apt-get update && \
     dpkg --remove --force-depends ncurses-base ncurses-bin 2>/dev/null || true && \
     rm -rf /var/lib/apt/lists/*
 
-# Install Deno (required for yt-dlp YouTube extraction)
-RUN curl -fsSL https://deno.land/install.sh | sh && \
-    ln -s /root/.deno/bin/deno /usr/local/bin/deno
+# Install pinned Deno binary with checksum verification (required for yt-dlp YouTube extraction)
+ARG DENO_VERSION=2.7.7
+ARG DENO_SHA256=0cd918870657ccc3d96ac682290e894dda374e2a742424aae9118b258a6cf7a3
+RUN curl -fsSL -o /tmp/deno.zip \
+        "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-x86_64-unknown-linux-gnu.zip" && \
+    echo "${DENO_SHA256}  /tmp/deno.zip" | sha256sum -c - && \
+    unzip -o /tmp/deno.zip -d /usr/local/bin/ && \
+    chmod +x /usr/local/bin/deno && \
+    rm /tmp/deno.zip
 
 # YouTube PO-token provider: copy the Node runtime + the prebuilt bgutil server
 # from the potoken stage, and install the shared libs its native `canvas`
@@ -139,6 +146,13 @@ COPY --from=pluginbuild /out/NeXroll.Jellyfin.zip /app/plugins/NeXroll.Jellyfin.
 # Prepare persistent data volume
 RUN mkdir -p /data /data/prerolls
 
+# PUID/PGID entrypoint: creates/matches the requested UID:GID (default 99:100,
+# Unraid's nobody:users) and drops privileges via gosu before exec'ing uvicorn,
+# so the container never runs the app as root. Upstream runs as root with no
+# entrypoint; this is fork-specific for Unraid appdata ownership.
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 VOLUME ["/data"]
 
 EXPOSE 9393
@@ -147,5 +161,4 @@ EXPOSE 9393
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
   CMD curl -fsS http://localhost:${NEXROLL_PORT:-9393}/health || exit 1
 
-# Start Uvicorn
-CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${NEXROLL_PORT:-9393}"]
+ENTRYPOINT ["/app/entrypoint.sh"]
