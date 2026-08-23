@@ -597,6 +597,10 @@ class Scheduler:
             return
         self._last_trailer_cleanup_time = now
 
+        import sys as _sys
+        _main_mod = _sys.modules.get('backend.main') or _sys.modules.get('__main__')
+        find_preroll_for_trailer = getattr(_main_mod, '_find_preroll_for_trailer', None) if _main_mod else None
+
         db = SessionLocal()
         try:
             setting = db.query(models.Setting).first()
@@ -633,6 +637,18 @@ class Scheduler:
                     if t.local_path and os.path.exists(t.local_path):
                         try:
                             os.remove(t.local_path)
+                        except Exception:
+                            pass
+                    # Also drop the Preroll row synced from this trailer (via
+                    # /nexup/trailers/sync-prerolls) - the manual delete endpoint
+                    # already does this; this time-based path didn't, leaving an
+                    # orphaned row pointing at a now-deleted file that the scanner
+                    # reports as "missing" indefinitely.
+                    if find_preroll_for_trailer:
+                        try:
+                            orphaned_preroll = find_preroll_for_trailer(db, t.local_path)
+                            if orphaned_preroll:
+                                db.delete(orphaned_preroll)
                         except Exception:
                             pass
                     db.delete(t)

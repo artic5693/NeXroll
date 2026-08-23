@@ -15615,11 +15615,15 @@ def system_health_summary(conflicts: Optional[int] = None, db: Session = Depends
         setting = db.query(models.Setting).first()
         configured = []
         if setting:
-            if getattr(setting, "plex_url", None) and getattr(setting, "plex_token", None):
+            # Credentials live in secure_store once migrated, with the DB column
+            # left as a fallback for un-migrated installs - checking the DB
+            # column alone reports "disconnected" for every already-migrated
+            # server, which is the common case.
+            if getattr(setting, "plex_url", None) and (getattr(setting, "plex_token", None) or secure_store.get_plex_token()):
                 configured.append("Plex")
-            if getattr(setting, "jellyfin_url", None) and getattr(setting, "jellyfin_api_key", None):
+            if getattr(setting, "jellyfin_url", None) and (getattr(setting, "jellyfin_api_key", None) or secure_store.get_jellyfin_api_key()):
                 configured.append("Jellyfin")
-            if getattr(setting, "emby_url", None) and getattr(setting, "emby_api_key", None):
+            if getattr(setting, "emby_url", None) and (getattr(setting, "emby_api_key", None) or secure_store.get_emby_api_key()):
                 configured.append("Emby")
 
         if len(configured) == 1:
