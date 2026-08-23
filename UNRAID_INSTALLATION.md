@@ -22,7 +22,7 @@
 4. **Click "Template repositories"**
 5. **Add this URL:**
    ```
-   https://raw.githubusercontent.com/JFLXCLOUD/NeXroll/main/nexroll-unraid-template.xml
+   https://raw.githubusercontent.com/artic5693/NeXroll/main/nexroll-unraid-template.xml
    ```
 6. **Save and refresh**
 7. **Select "NeXroll" from template dropdown**
@@ -261,18 +261,18 @@ http://[UNRAID-IP]:9393
 
 ## Support & Resources
 
-- **GitHub Issues:** https://github.com/JFLXCLOUD/NeXroll/issues
-- **Documentation:** https://github.com/JFLXCLOUD/NeXroll
-- **Docker Hub:** https://hub.docker.com/r/jbrns/nexroll
+- **GitHub Issues:** https://github.com/artic5693/NeXroll/issues
+- **Documentation:** https://github.com/artic5693/NeXroll
+- **Container Registry:** https://github.com/artic5693/NeXroll/pkgs/container/nexroll
 - **Version:** Check in NeXroll UI (bottom right)
 
 ---
 
 ## Version Information
 
-- **Current Version:** 1.11.0
-- **Docker Image:** `jbrns/nexroll:latest`
-- **Platform:** linux/amd64, linux/arm64
+- **Current Version:** v2.1.0-beta.2
+- **Docker Image:** `ghcr.io/artic5693/nexroll:latest`
+- **Platform:** linux/amd64
 - **Base:** Python 3.12 + prebuilt frontend
 
 ---

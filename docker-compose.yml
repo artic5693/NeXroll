@@ -1,9 +1,9 @@
 # NeXroll Docker Compose Configuration
-# Documentation: https://github.com/JFLXCLOUD/NeXroll
+# Documentation: https://github.com/artic5693/NeXroll
 
 services:
   nexroll:
-    image: jbrns/nexroll:latest
+    image: ghcr.io/artic5693/nexroll:latest
     container_name: nexroll
     restart: unless-stopped
     
@@ -99,7 +99,7 @@ volumes:
 #       - /path/to/prerolls:/prerolls
 # 
 #   nexroll:
-#     image: jbrns/nexroll:latest
+#     image: ghcr.io/artic5693/nexroll:latest
 #     container_name: nexroll
 #     ports:
 #       - "9393:9393"

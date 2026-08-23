@@ -17,13 +17,13 @@ URLs (default):
 
 | Tag | Description |
 |-----|-------------|
-| `jbrns/nexroll:latest` | Latest stable release (recommended for production) |
-| `jbrns/nexroll:beta` | Latest beta/pre-release version (for testing new features) |
-| `jbrns/nexroll:1.12.0` | Specific version (pin to a known good version) |
+| `ghcr.io/artic5693/nexroll:latest` | Latest tagged release (recommended for production) |
+| `ghcr.io/artic5693/nexroll:dev` | Latest build from `main` (untagged/in-progress work) |
+| `ghcr.io/artic5693/nexroll:sha-<commit>` | Pinned to a specific commit build |
 
-**To use the beta channel**, change your image tag:
+**To use the dev channel**, change your image tag:
 ```yaml
-image: jbrns/nexroll:beta
+image: ghcr.io/artic5693/nexroll:dev
 ```
 
 
@@ -43,7 +43,7 @@ docker-compose.yml
 version: "3.8"
 services:
   nexroll:
-    image: jbrns/nexroll:latest
+    image: ghcr.io/artic5693/nexroll:latest
     network_mode: "host"
     environment:
       - NEXROLL_PORT=9393
@@ -77,7 +77,7 @@ If you cannot use host networking (e.g., Docker Desktop on Windows/macOS), use n
 version: "3.8"
 services:
   nexroll:
-    image: jbrns/nexroll:latest
+    image: ghcr.io/artic5693/nexroll:latest
     ports:
       - "9393:9393"
     environment:
@@ -197,9 +197,7 @@ docker compose up -d
 
 ## 13) Image metadata
 
-Images include OCI labels with title, description, version, and license. CI builds push to Docker Hub and GHCR. See the GitHub Actions workflows at:
-- [docker-image.yml](.github/workflows/docker-image.yml:1)
-- [docker-publish.yml](.github/workflows/docker-publish.yml:1)
+Images include OCI labels with title, description, version, and license. CI builds push to GHCR (`ghcr.io/artic5693/nexroll`) on every push to `main`, or with an explicit version tag via manual dispatch. See [docker-build.yml](.github/workflows/docker-build.yml:1).
 
 
 ---
