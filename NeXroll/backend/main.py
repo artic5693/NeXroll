@@ -23530,27 +23530,28 @@ def get_preroll_settings(db: Session = Depends(get_db)):
 def list_generated_prerolls(db: Session = Depends(get_db)):
     """List all generated dynamic preroll videos"""
     setting = db.query(models.Setting).first()
-    
+
     if not setting:
-        return {"prerolls": [], "coming_soon_lists": []}
-    
+        return {"prerolls": [], "coming_soon_lists": [], "recently_added_lists": []}
+
     storage_path = getattr(setting, 'nexup_storage_path', None)
     if not storage_path:
-        return {"prerolls": [], "coming_soon_lists": []}
-    
+        return {"prerolls": [], "coming_soon_lists": [], "recently_added_lists": []}
+
     output_dir = Path(storage_path) / "dynamic_prerolls"
     prerolls = []
     coming_soon_lists = []
-    
+    recently_added_lists = []
+
     if output_dir.exists():
         # List dynamic prerolls (*_preroll.mp4)
         for file in output_dir.glob("*_preroll.mp4"):
             # Extract template name from filename (e.g., "coming_soon_cinematic_preroll.mp4" -> "coming_soon_cinematic")
             template_id = file.stem.replace("_preroll", "")
-            
+
             # Get file stats
             stat = file.stat()
-            
+
             prerolls.append({
                 "filename": file.name,
                 "template_id": template_id,
@@ -23558,7 +23559,7 @@ def list_generated_prerolls(db: Session = Depends(get_db)):
                 "size_bytes": stat.st_size,
                 "created_at": stat.st_mtime
             })
-        
+
         # List coming soon list videos (coming_soon_grid.mp4, coming_soon_list.mp4)
         for file in output_dir.glob("coming_soon_*.mp4"):
             # Skip general dynamic prerolls that end with _preroll
@@ -23566,10 +23567,10 @@ def list_generated_prerolls(db: Session = Depends(get_db)):
                 continue
             # Extract layout type from filename (e.g., "coming_soon_grid.mp4" -> "grid")
             layout_type = file.stem.replace("coming_soon_", "")
-            
+
             # Get file stats
             stat = file.stat()
-            
+
             coming_soon_lists.append({
                 "filename": file.name,
                 "layout": layout_type,
@@ -23577,12 +23578,32 @@ def list_generated_prerolls(db: Session = Depends(get_db)):
                 "size_bytes": stat.st_size,
                 "created_at": stat.st_mtime
             })
-    
+
+        # List recently added list videos (recently_added_grid.mp4, recently_added_list.mp4)
+        for file in output_dir.glob("recently_added_*.mp4"):
+            # Skip general dynamic prerolls that end with _preroll
+            if file.stem.endswith('_preroll'):
+                continue
+            # Extract layout type from filename (e.g., "recently_added_grid.mp4" -> "grid")
+            layout_type = file.stem.replace("recently_added_", "")
+
+            # Get file stats
+            stat = file.stat()
+
+            recently_added_lists.append({
+                "filename": file.name,
+                "layout": layout_type,
+                "path": str(file),
+                "size_bytes": stat.st_size,
+                "created_at": stat.st_mtime
+            })
+
     # Sort by creation time (newest first)
     prerolls.sort(key=lambda x: x["created_at"], reverse=True)
     coming_soon_lists.sort(key=lambda x: x["created_at"], reverse=True)
-    
-    return {"prerolls": prerolls, "coming_soon_lists": coming_soon_lists}
+    recently_added_lists.sort(key=lambda x: x["created_at"], reverse=True)
+
+    return {"prerolls": prerolls, "coming_soon_lists": coming_soon_lists, "recently_added_lists": recently_added_lists}
 
 @app.delete("/nexup/preroll/{filename}")
 def delete_specific_preroll(filename: str, db: Session = Depends(get_db)):

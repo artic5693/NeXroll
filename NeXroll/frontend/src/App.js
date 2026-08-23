@@ -1170,7 +1170,7 @@ const [applyingToServer, setApplyingToServer] = useState(false);
   const [communityIndexProgress, setCommunityIndexProgress] = useState(null); // { status: 'Building...', phase: 'init'|'done'|'error' }
   const [nexupSyncProgress, setNexupSyncProgress] = useState(null); // { status: 'Syncing...', phase: 'init'|'done'|'error' }
   const [updateCheckProgress, setUpdateCheckProgress] = useState(null); // { status: 'Checking...', phase: 'init'|'done'|'error' }
-  const [generatorTab, setGeneratorTab] = useState('dynamic'); // 'dynamic' or 'coming-soon'
+  const [generatorTab, setGeneratorTab] = useState('dynamic'); // 'dynamic', 'coming-soon', or 'recently-added'
   // Dynamic Preroll Generator State
   const [dynamicPrerollSettings, setDynamicPrerollSettings] = useState({
     template: 'coming_soon',
@@ -1215,7 +1215,34 @@ const [applyingToServer, setApplyingToServer] = useState(false);
   const [previewingComingSoonList, setPreviewingComingSoonList] = useState(null);
   const comingSoonListSettingsLoadedRef = React.useRef(false); // Track if initial load done
   const dynamicPrerollSettingsLoadedRef = React.useRef(false); // Track if initial load done
-  
+
+  // Recently Added List Generator State
+  const [recentlyAddedListSettings, setRecentlyAddedListSettings] = useState({
+    layout: 'grid', // 'list' or 'grid'
+    source: 'both', // 'movies', 'shows', or 'both'
+    duration: 10,
+    maxItems: 8,
+    bgColor: '#141428',
+    textColor: '#ffffff',
+    accentColor: '#00d4ff',
+    serverName: '',
+    autoRegen: false, // Auto-regenerate when Radarr/Sonarr syncs
+    autoRegenLayout: 'both', // Which layout(s) to auto-regenerate: 'grid', 'list', or 'both'
+    includeAudio: false, // Include background music in generated video
+    customAudioFilename: null, // User-uploaded custom audio filename
+    customLogoFilename: null, // User-uploaded custom logo filename
+    logoMode: 'watermark', // 'watermark' = faded bg, 'right' = right of header, 'below' = below header
+    daysBack: 30 // How many days back counts as "recently added"
+  });
+  const [recentlyAddedListGenerating, setRecentlyAddedListGenerating] = useState(false);
+  const [generatedRecentlyAddedLists, setGeneratedRecentlyAddedLists] = useState([]);
+  const [recentlyAddedListsCollapsed, setRecentlyAddedListsCollapsed] = useState(false);
+  const [previewingRecentlyAddedList, setPreviewingRecentlyAddedList] = useState(null);
+  const recentlyAddedListSettingsLoadedRef = React.useRef(false); // Track if initial load done
+  const [recentlyAddedItems, setRecentlyAddedItems] = useState([]);
+  const [recentlyAddedLoading, setRecentlyAddedLoading] = useState(false);
+  const [recentlyAddedTab, setRecentlyAddedTab] = useState('movies'); // 'movies' or 'shows'
+
   // Translation lookup for live preview text
   const prerollTranslations = {
     en: { coming_soon: 'COMING SOON', to: 'to', feature_presentation: 'FEATURE PRESENTATION', now_showing: 'NOW SHOWING', at: 'at', coming_soon_to: 'COMING SOON TO', available_now: 'Available Now!' },
@@ -1436,6 +1463,8 @@ useEffect(() => {
     closeTopDialog = () => setPlayingTrailer(null);
   } else if (previewingComingSoonList) {
     closeTopDialog = () => setPreviewingComingSoonList(null);
+  } else if (previewingRecentlyAddedList) {
+    closeTopDialog = () => setPreviewingRecentlyAddedList(null);
   } else if (previewingDynamicPreroll) {
     closeTopDialog = () => setPreviewingDynamicPreroll(null);
   } else if (communityPreviewingPreroll) {
@@ -1468,7 +1497,7 @@ useEffect(() => {
 
   const anyHandcraftedDialogOpen = Boolean(
     altTrailers.open || showHolidayBrowser || youtubeSetup.showWizard || showFolderBrowser ||
-    playingTrailer || previewingComingSoonList || previewingDynamicPreroll ||
+    playingTrailer || previewingComingSoonList || previewingRecentlyAddedList || previewingDynamicPreroll ||
     communityPreviewingPreroll || currentPrerollPreview || previewingPreroll ||
     showManualTrailerModal || showNexupTVTrailers || showNexupUpcomingTV ||
     showNexupTrailers || showNexupUpcoming || showNexupSequenceWizard ||
@@ -1493,7 +1522,7 @@ useEffect(() => {
 }, [
   altTrailers.open, altTrailers.downloadingUrl, communityPreviewingPreroll,
   currentPrerollPreview, factoryReset.open, factoryReset.busy, nexupLoading,
-  playingTrailer, previewingComingSoonList, previewingDynamicPreroll,
+  playingTrailer, previewingComingSoonList, previewingRecentlyAddedList, previewingDynamicPreroll,
   previewingPreroll, showChangePasswordModal, showCreateUserModal,
   showFolderBrowser, showHolidayBrowser, showManualTrailerModal,
   showNewKeyModal, showNexupSequenceWizard, showNexupTrailers,
@@ -20477,6 +20506,28 @@ const DashboardTiles = {
         }));
         // Mark settings as loaded to enable auto-save
         setTimeout(() => { comingSoonListSettingsLoadedRef.current = true; }, 100);
+
+        // Also populate Recently Added List settings from the loaded data
+        setRecentlyAddedListSettings(prev => ({
+          ...prev,
+          layout: data.recently_added_list_layout || 'grid',
+          source: data.recently_added_list_source || 'both',
+          duration: data.recently_added_list_duration || 10,
+          maxItems: data.recently_added_list_max_items || 8,
+          bgColor: data.recently_added_list_bg_color || '#141428',
+          textColor: data.recently_added_list_text_color || '#ffffff',
+          accentColor: data.recently_added_list_accent_color || '#00d4ff',
+          serverName: data.recently_added_list_server_name || '',
+          autoRegen: data.recently_added_list_auto_regen || false,
+          autoRegenLayout: data.recently_added_list_auto_regen_layout || 'both',
+          includeAudio: data.recently_added_list_include_audio || false,
+          customAudioFilename: data.recently_added_list_custom_audio_filename || null,
+          customLogoFilename: data.recently_added_list_custom_logo_filename || null,
+          logoMode: (() => { const m = data.recently_added_list_logo_mode || 'watermark'; return m === 'replace' ? 'below' : m; })(),
+          daysBack: data.recently_added_days || 30
+        }));
+        // Mark settings as loaded to enable auto-save
+        setTimeout(() => { recentlyAddedListSettingsLoadedRef.current = true; }, 100);
       }
     } catch (err) {
       console.error('Failed to load NeX-Up settings:', err);
@@ -20520,6 +20571,42 @@ const DashboardTiles = {
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [comingSoonListSettings]);
+
+  // Save Recently Added List settings to backend (for persistence)
+  const saveRecentlyAddedListSettings = async (settings) => {
+    try {
+      const params = new URLSearchParams();
+      if (settings.layout !== undefined) params.append('recently_added_list_layout', settings.layout);
+      if (settings.source !== undefined) params.append('recently_added_list_source', settings.source);
+      if (settings.duration !== undefined) params.append('recently_added_list_duration', settings.duration.toString());
+      if (settings.maxItems !== undefined) params.append('recently_added_list_max_items', settings.maxItems.toString());
+      if (settings.bgColor !== undefined) params.append('recently_added_list_bg_color', settings.bgColor);
+      if (settings.textColor !== undefined) params.append('recently_added_list_text_color', settings.textColor);
+      if (settings.accentColor !== undefined) params.append('recently_added_list_accent_color', settings.accentColor);
+      if (settings.serverName !== undefined) params.append('recently_added_list_server_name', settings.serverName);
+      if (settings.autoRegen !== undefined) params.append('recently_added_list_auto_regen', settings.autoRegen.toString());
+      if (settings.autoRegenLayout !== undefined) params.append('recently_added_list_auto_regen_layout', settings.autoRegenLayout);
+      if (settings.includeAudio !== undefined) params.append('recently_added_list_include_audio', settings.includeAudio.toString());
+      if (settings.logoMode !== undefined) params.append('recently_added_list_logo_mode', settings.logoMode);
+      if (settings.daysBack !== undefined) params.append('recently_added_days', settings.daysBack.toString());
+
+      await fetch(apiUrl('/nexup/settings?' + params.toString()), { method: 'PUT' });
+    } catch (err) {
+      console.error('Failed to save Recently Added List settings:', err);
+    }
+  };
+
+  // Auto-save Recently Added List settings when they change (with debounce)
+  React.useEffect(() => {
+    if (!recentlyAddedListSettingsLoadedRef.current) return; // Skip until initial load done
+
+    const timer = setTimeout(() => {
+      saveRecentlyAddedListSettings(recentlyAddedListSettings);
+    }, 500); // 500ms debounce
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recentlyAddedListSettings]);
 
   // Auto-save Dynamic Preroll language when it changes (with debounce)
   React.useEffect(() => {

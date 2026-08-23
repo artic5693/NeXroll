@@ -74,6 +74,7 @@ const NAV = [
     children: [
       { id: 'nexup', label: 'Connections', icon: LinkIcon },
       { id: 'nexup/upcoming', label: 'Upcoming', icon: ClipboardList },
+      { id: 'nexup/recently-added', label: 'Recently Added', icon: Film },
       { id: 'nexup/trailers', label: 'Your Trailers', icon: Film },
       { id: 'nexup/generator', label: 'Generator', icon: Sparkles },
       { id: 'nexup/settings', label: 'Settings', icon: Settings },
@@ -130,6 +131,7 @@ const KEYWORDS = {
   'schedules/conflicts': 'conflict overlap priority exclusive blend resolve',
   'nexup': 'radarr sonarr connections integrations trailers automation',
   'nexup/upcoming': 'upcoming movies tv shows radarr sonarr releases',
+  'nexup/recently-added': 'recently added movies tv shows radarr sonarr library new',
   'nexup/trailers': 'trailers downloaded youtube your',
   'nexup/generator': 'generate dynamic preroll coming soon list create',
   'nexup/settings': 'nexup settings radarr sonarr tmdb youtube cookies quality',
