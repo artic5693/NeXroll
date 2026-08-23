@@ -10622,7 +10622,7 @@ const DashboardTiles = {
               {preroll.thumbnail && (
                 <img
                   src={thumbnailUrl(preroll.thumbnail)}
-                  alt="thumbnail"
+                  alt=""
                   onError={(e) => {
                     try {
                       const rel = preroll.thumbnail || '';
@@ -10775,7 +10775,7 @@ const DashboardTiles = {
            {preroll.thumbnail && (
              <img
                src={thumbnailUrl(preroll.thumbnail)}
-               alt="thumbnail"
+               alt=""
                style={{ width: 120, height: 'auto', borderRadius: 6, flexShrink: 0 }}
                onError={(e) => {
                  try {
@@ -21519,6 +21519,7 @@ const DashboardTiles = {
     loadDynamicPrerollSettings();
     loadGeneratedPrerolls();
     loadGeneratedComingSoonLists();
+    loadGeneratedRecentlyAddedLists();
     loadYoutubeStatus();
     loadPotoken();
   }, []);
@@ -21831,6 +21832,92 @@ const DashboardTiles = {
       if (res.ok) {
         showAlert('Coming Soon List deleted', 'success');
         loadGeneratedComingSoonLists();
+        loadGeneratedPrerolls();
+      } else {
+        const err = await res.json();
+        showAlert(err.detail || 'Failed to delete', 'error');
+      }
+    } catch (err) {
+      showAlert('Error deleting: ' + (err?.message || err), 'error');
+    }
+  };
+
+  // ========================================
+  // Recently Added List Generator Functions
+  // ========================================
+
+  const loadGeneratedRecentlyAddedLists = async () => {
+    try {
+      const res = await fetch(apiUrl('/nexup/preroll/list'));
+      if (res.ok) {
+        const data = await res.json();
+        setGeneratedRecentlyAddedLists(data.recently_added_lists || []);
+      }
+    } catch (err) {
+      console.error('Failed to load Recently Added Lists:', err);
+    }
+  };
+
+  const handleGenerateRecentlyAddedList = async () => {
+    setRecentlyAddedListGenerating(true);
+    try {
+      const params = new URLSearchParams({
+        layout: recentlyAddedListSettings.layout,
+        source: recentlyAddedListSettings.source,
+        duration: recentlyAddedListSettings.duration.toString(),
+        max_items: recentlyAddedListSettings.maxItems.toString(),
+        bg_color: recentlyAddedListSettings.bgColor,
+        text_color: recentlyAddedListSettings.textColor,
+        accent_color: recentlyAddedListSettings.accentColor
+      });
+      if (recentlyAddedListSettings.serverName.trim()) {
+        params.append('server_name', recentlyAddedListSettings.serverName.trim());
+      }
+      if (recentlyAddedListSettings.includeAudio) {
+        params.append('include_audio', 'true');
+      }
+
+      const res = await fetch(apiUrl(`/nexup/preroll/generate-recently-added-list?${params}`), {
+        method: 'POST'
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        const msg = data.total_eligible && data.total_eligible < data.max_items_setting
+          ? `Recently Added List generated with ${data.items_count} items (only ${data.total_eligible} eligible items)`
+          : `Recently Added List generated with ${data.items_count} items!`;
+        showAlert(msg, 'success');
+        loadGeneratedRecentlyAddedLists();
+        loadGeneratedPrerolls();
+      } else {
+        const raw = await res.text();
+        let detail = `Failed to generate Recently Added List (HTTP ${res.status})`;
+        try {
+          const parsed = JSON.parse(raw);
+          if (parsed && parsed.detail) detail = parsed.detail;
+        } catch {
+          if (raw && raw.length < 300) detail += `: ${raw.trim()}`;
+        }
+        showAlert(detail, 'error');
+      }
+    } catch (err) {
+      showAlert('Error generating Recently Added List: ' + (err?.message || err), 'error');
+    } finally {
+      setRecentlyAddedListGenerating(false);
+    }
+  };
+
+  const handleDeleteRecentlyAddedList = async (filename) => {
+    if (confirmDeletions && !window.confirm(`Delete "${filename}"? This cannot be undone.`)) {
+      return;
+    }
+    try {
+      const res = await fetch(apiUrl(`/nexup/preroll/${encodeURIComponent(filename)}`), {
+        method: 'DELETE'
+      });
+      if (res.ok) {
+        showAlert('Recently Added List deleted', 'success');
+        loadGeneratedRecentlyAddedLists();
         loadGeneratedPrerolls();
       } else {
         const err = await res.json();
@@ -22199,6 +22286,9 @@ const DashboardTiles = {
       handleLoadNexupUpcoming();
       loadNexupUpcomingTV();
     }
+    if (activeTab === 'nexup/recently-added') {
+      handleLoadRecentlyAdded();
+    }
   }, [activeTab]);
 
   // ============================================
@@ -22214,6 +22304,9 @@ const DashboardTiles = {
     }
     if (activeTab === 'nexup/generator') {
       return renderNexUpGenerator();
+    }
+    if (activeTab === 'nexup/recently-added') {
+      return renderNexUpRecentlyAdded();
     }
     if (activeTab === 'nexup/upcoming') {
       return renderNexUpUpcoming();
@@ -22769,6 +22862,348 @@ const DashboardTiles = {
                           {show.excluded_from_list ? <><EyeOff size={14} /> Excluded</> : <><Eye size={14} /> In List</>}
                         </button>
                       )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  // NeX-Up Recently Added Sub-Page - browse recently-added library content, mirrors Upcoming
+  const handleLoadRecentlyAdded = async () => {
+    setRecentlyAddedLoading(true);
+    try {
+      const res = await fetch(apiUrl('/nexup/preroll/recently-added-list/preview?source=both&max_items=100'));
+      const data = await res.json();
+      setRecentlyAddedItems(data.items || []);
+    } catch (err) {
+      console.error('Failed to load recently added items:', err);
+    } finally {
+      setRecentlyAddedLoading(false);
+    }
+  };
+
+  const handleToggleRecentlyAddedExclude = async (item) => {
+    try {
+      const res = await fetch(apiUrl(`/nexup/recently-added/exclude?title=${encodeURIComponent(item.title)}&item_type=${item.type}`), { method: 'PUT' });
+      if (res.ok) {
+        handleLoadRecentlyAdded();
+      }
+    } catch (err) {
+      console.error('Failed to toggle exclude:', err);
+    }
+  };
+
+  const renderNexUpRecentlyAdded = () => {
+    const movies = recentlyAddedItems.filter(i => i.type === 'movie');
+    const shows = recentlyAddedItems.filter(i => i.type === 'show');
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        {/* Header */}
+        <div>
+          <h1 className="header" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+            <Film size={32} className="header-icon" /> Recently Added
+          </h1>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem', margin: 0 }}>
+            Content recently added to your library from Radarr and Sonarr. Control what appears in your Recently Added list.
+          </p>
+        </div>
+
+        {/* Movies/Shows Tab Switcher */}
+        <div style={{ display: 'flex', gap: '0.5rem', borderBottom: '2px solid var(--border-color)', paddingBottom: '0' }}>
+          <button
+            onClick={() => setRecentlyAddedTab('movies')}
+            style={{
+              padding: '0.75rem 1.5rem',
+              border: 'none',
+              borderBottom: recentlyAddedTab === 'movies' ? '3px solid var(--accent-color)' : '3px solid transparent',
+              backgroundColor: 'transparent',
+              color: recentlyAddedTab === 'movies' ? 'var(--accent-color)' : 'var(--text-color)',
+              cursor: 'pointer',
+              fontSize: '0.95rem',
+              fontWeight: recentlyAddedTab === 'movies' ? 600 : 400,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              marginBottom: '-2px'
+            }}
+          >
+            <Video size={18} /> Movies ({movies.length})
+          </button>
+          <button
+            onClick={() => setRecentlyAddedTab('shows')}
+            style={{
+              padding: '0.75rem 1.5rem',
+              border: 'none',
+              borderBottom: recentlyAddedTab === 'shows' ? '3px solid #17a2b8' : '3px solid transparent',
+              backgroundColor: 'transparent',
+              color: recentlyAddedTab === 'shows' ? '#17a2b8' : 'var(--text-color)',
+              cursor: 'pointer',
+              fontSize: '0.95rem',
+              fontWeight: recentlyAddedTab === 'shows' ? 600 : 400,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              marginBottom: '-2px'
+            }}
+          >
+            <Tv size={18} /> TV Shows ({shows.length})
+          </button>
+        </div>
+
+        {/* Refresh Button */}
+        <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button
+            onClick={handleLoadRecentlyAdded}
+            disabled={recentlyAddedLoading}
+            className="button"
+            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+          >
+            {recentlyAddedLoading ? <Loader2 size={16} className="spin" /> : <RefreshCw size={16} />}
+            Refresh List
+          </button>
+        </div>
+
+        {/* Movies Tab Content */}
+        {recentlyAddedTab === 'movies' && (
+          <div className="card">
+            {!nexupSettings.radarr_connected ? (
+              <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
+                <Video size={48} style={{ marginBottom: '1rem', opacity: 0.5 }} />
+                <p>Radarr not connected. Go to <strong>Connections</strong> to connect.</p>
+              </div>
+            ) : movies.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
+                {recentlyAddedLoading ? (
+                  <><Loader2 size={32} className="spin" /><p>Loading recently added movies...</p></>
+                ) : (
+                  <><Film size={48} style={{ marginBottom: '1rem', opacity: 0.5 }} /><p>No recently added movies found. Click Refresh to load from Radarr.</p></>
+                )}
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: '1rem' }}>
+                {movies.map((movie, idx) => (
+                  <div
+                    key={movie.radarr_id || idx}
+                    style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: '1rem',
+                      padding: '1rem',
+                      backgroundColor: movie.excluded_from_list ? 'rgba(220, 53, 69, 0.1)' : 'var(--bg-color)',
+                      borderRadius: '8px',
+                      border: `1px solid ${movie.excluded_from_list ? '#dc3545' : movie.downloaded ? '#28a745' : 'var(--border-color)'}`,
+                      opacity: movie.excluded_from_list ? 0.7 : 1
+                    }}
+                  >
+                    {movie.poster_url && (
+                      <img
+                        src={movie.poster_url}
+                        alt={movie.title}
+                        style={{ width: '80px', height: '120px', objectFit: 'cover', borderRadius: '4px' }}
+                        onError={(e) => e.target.style.display = 'none'}
+                      />
+                    )}
+                    <div style={{ flex: 1 }}>
+                      <h3 style={{ margin: '0 0 0.5rem 0', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        {movie.title} {movie.year && `(${movie.year})`}
+                        <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', backgroundColor: '#28a745', color: 'white', borderRadius: '4px' }}>
+                          In Library
+                        </span>
+                      </h3>
+                      {movie.added_date && (
+                        <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.9rem' }}>
+                          <strong>Added:</strong> {formatReleaseDate(movie.added_date)}
+                        </p>
+                      )}
+                      {(movie.runtime || (movie.genres && movie.genres.length > 0)) && (
+                        <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                          {movie.runtime ? `${movie.runtime} min` : ''}{movie.runtime && movie.genres?.length ? ' • ' : ''}{(movie.genres || []).join(', ')}
+                        </p>
+                      )}
+                      <p style={{ margin: '0', fontSize: '0.85rem', color: 'var(--text-secondary)', maxHeight: '40px', overflow: 'hidden' }}>
+                        {movie.overview?.substring(0, 150)}{movie.overview?.length > 150 ? '...' : ''}
+                      </p>
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'flex-end' }}>
+                      {movie.downloaded ? (
+                        <span style={{
+                          padding: '0.5rem 1rem',
+                          borderRadius: '4px',
+                          backgroundColor: '#28a745',
+                          color: 'white',
+                          fontSize: '0.85rem',
+                          fontWeight: 500
+                        }}>
+                          Trailer Downloaded
+                        </span>
+                      ) : (
+                        <button
+                          onClick={async () => { await handleDownloadTrailer(movie.radarr_id, movie.title); handleLoadRecentlyAdded(); }}
+                          disabled={downloadingTrailerId === movie.radarr_id || recentlyAddedLoading}
+                          className="button"
+                          style={{
+                            backgroundColor: downloadingTrailerId === movie.radarr_id ? '#6c757d' : '#007bff',
+                            minWidth: '140px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '0.5rem',
+                            fontSize: '0.85rem'
+                          }}
+                        >
+                          {downloadingTrailerId === movie.radarr_id ? (
+                            <><Loader2 size={14} className="spin" /> Downloading...</>
+                          ) : (
+                            <><Download size={14} /> Download</>
+                          )}
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => handleToggleRecentlyAddedExclude(movie)}
+                        className="button"
+                        style={{
+                          backgroundColor: movie.excluded_from_list ? '#dc3545' : 'transparent',
+                          border: '1px solid ' + (movie.excluded_from_list ? '#dc3545' : 'var(--border-color)'),
+                          color: movie.excluded_from_list ? 'white' : 'var(--text-color)',
+                          fontSize: '0.8rem',
+                          padding: '0.35rem 0.75rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.35rem'
+                        }}
+                        title={movie.excluded_from_list ? 'Include in Recently Added list' : 'Exclude from Recently Added list'}
+                      >
+                        {movie.excluded_from_list ? <><EyeOff size={14} /> Excluded</> : <><Eye size={14} /> In List</>}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TV Shows Tab Content */}
+        {recentlyAddedTab === 'shows' && (
+          <div className="card">
+            {!nexupSettings.sonarr_connected ? (
+              <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
+                <Tv size={48} style={{ marginBottom: '1rem', opacity: 0.5 }} />
+                <p>Sonarr not connected. Go to <strong>Connections</strong> to connect.</p>
+              </div>
+            ) : shows.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-secondary)' }}>
+                {recentlyAddedLoading ? (
+                  <><Loader2 size={32} className="spin" /><p>Loading recently added TV shows...</p></>
+                ) : (
+                  <><Film size={48} style={{ marginBottom: '1rem', opacity: 0.5 }} /><p>No recently added TV shows found. Click Refresh to load from Sonarr.</p></>
+                )}
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: '1rem' }}>
+                {shows.map((show, idx) => (
+                  <div
+                    key={`${show.sonarr_id || idx}_${show.season_number || 0}`}
+                    style={{
+                      display: 'flex',
+                      gap: '1rem',
+                      padding: '1rem',
+                      backgroundColor: show.excluded_from_list ? 'rgba(220, 53, 69, 0.1)' : 'var(--bg-color)',
+                      borderRadius: '8px',
+                      border: `1px solid ${show.excluded_from_list ? '#dc3545' : show.downloaded ? '#28a745' : 'var(--border-color)'}`,
+                      opacity: show.excluded_from_list ? 0.7 : 1
+                    }}
+                  >
+                    {show.poster_url && (
+                      <img
+                        src={show.poster_url}
+                        alt={show.title}
+                        style={{ width: '80px', height: '120px', objectFit: 'cover', borderRadius: '4px' }}
+                        onError={(e) => e.target.style.display = 'none'}
+                      />
+                    )}
+                    <div style={{ flex: 1 }}>
+                      <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '1.1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        {show.title} {show.year && `(${show.year})`}
+                        <span style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', backgroundColor: '#28a745', color: 'white', borderRadius: '4px' }}>
+                          In Library
+                        </span>
+                      </h3>
+                      {show.season_number && (
+                        <p style={{ margin: '0 0 0.25rem 0', fontSize: '0.9rem', color: '#17a2b8', fontWeight: 500 }}>
+                          Season {show.season_number}
+                        </p>
+                      )}
+                      {show.added_date && (
+                        <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.9rem' }}>
+                          <strong>Added:</strong> {formatReleaseDate(show.added_date)}
+                        </p>
+                      )}
+                      {show.network && (
+                        <p style={{ margin: '0 0 0.25rem 0', fontSize: '0.85rem', color: 'var(--text-secondary)' }}>
+                          {show.network}
+                        </p>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'flex-end' }}>
+                      {show.downloaded ? (
+                        <span style={{
+                          padding: '0.5rem 1rem',
+                          borderRadius: '4px',
+                          backgroundColor: '#28a745',
+                          color: 'white',
+                          fontSize: '0.85rem',
+                          fontWeight: 500
+                        }}>
+                          Trailer Downloaded
+                        </span>
+                      ) : (
+                        <button
+                          onClick={async () => { await handleDownloadTVTrailer(show.sonarr_id, show.season_number, show.title); handleLoadRecentlyAdded(); }}
+                          disabled={downloadingTrailerId === `tv_${show.sonarr_id}_${show.season_number}` || recentlyAddedLoading}
+                          className="button"
+                          style={{
+                            backgroundColor: downloadingTrailerId === `tv_${show.sonarr_id}_${show.season_number}` ? '#6c757d' : '#17a2b8',
+                            minWidth: '140px',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '0.5rem',
+                            fontSize: '0.85rem'
+                          }}
+                        >
+                          {downloadingTrailerId === `tv_${show.sonarr_id}_${show.season_number}` ? (
+                            <><Loader2 size={14} className="spin" /> Downloading...</>
+                          ) : (
+                            <><Download size={14} /> Download</>
+                          )}
+                        </button>
+                      )}
+
+                      <button
+                        onClick={() => handleToggleRecentlyAddedExclude(show)}
+                        className="button"
+                        style={{
+                          backgroundColor: show.excluded_from_list ? '#dc3545' : 'transparent',
+                          border: '1px solid ' + (show.excluded_from_list ? '#dc3545' : 'var(--border-color)'),
+                          color: show.excluded_from_list ? 'white' : 'var(--text-color)',
+                          fontSize: '0.8rem',
+                          padding: '0.35rem 0.75rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.35rem'
+                        }}
+                        title={show.excluded_from_list ? 'Include in Recently Added list' : 'Exclude from Recently Added list'}
+                      >
+                        {show.excluded_from_list ? <><EyeOff size={14} /> Excluded</> : <><Eye size={14} /> In List</>}
+                      </button>
                     </div>
                   </div>
                 ))}
@@ -25096,7 +25531,8 @@ const DashboardTiles = {
           }}>
             {[
               { id: 'dynamic', icon: <Sparkles size={16} />, label: 'Dynamic Preroll' },
-              { id: 'coming-soon', icon: <Film size={16} />, label: 'Coming Soon List' }
+              { id: 'coming-soon', icon: <Film size={16} />, label: 'Coming Soon List' },
+              { id: 'recently-added-list', icon: <Film size={16} />, label: 'Recently Added List' }
             ].map(tab => (
               <button
                 key={tab.id}
@@ -26648,9 +27084,228 @@ const DashboardTiles = {
           </div>
           )}
 
+          {generatorTab === 'recently-added-list' && (
+          <div className="card">
+            <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Film size={24} /> Recently Added List Generator
+            </h2>
+            <p style={{ color: '#888', marginBottom: '1rem' }}>
+              Generate a video showcasing content recently added to your library from Radarr/Sonarr.
+            </p>
+
+            {!ffmpegAvailable ? (
+              <div style={{
+                padding: '1rem',
+                backgroundColor: '#fff3cd',
+                border: '1px solid #ffc107',
+                borderRadius: '8px',
+                marginBottom: '1rem'
+              }}>
+                <strong style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}><AlertTriangle size={18} /> FFmpeg Required</strong>
+                <p style={{ margin: '0.5rem 0 0 0', fontSize: '0.9rem' }}>
+                  FFmpeg must be installed to generate Recently Added List videos.
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* Layout Selection */}
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', fontWeight: 'bold', fontSize: '0.95rem' }}>
+                    <LayoutGrid size={18} /> Layout Style
+                  </label>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    {['grid', 'list'].map(layout => (
+                      <button
+                        key={layout}
+                        onClick={() => setRecentlyAddedListSettings(prev => ({ ...prev, layout }))}
+                        style={{
+                          padding: '0.5rem 1rem',
+                          borderRadius: '20px',
+                          border: recentlyAddedListSettings.layout === layout ? '2px solid #00d4ff' : '2px solid var(--border-color)',
+                          backgroundColor: recentlyAddedListSettings.layout === layout ? 'rgba(0, 212, 255, 0.15)' : 'var(--card-bg, #1e1e2e)',
+                          color: 'var(--text-color, #fff)',
+                          cursor: 'pointer',
+                          textTransform: 'capitalize'
+                        }}
+                      >
+                        {layout}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Source Selection */}
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.75rem', fontWeight: 'bold', fontSize: '0.95rem' }}>
+                    Source
+                  </label>
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    {[{ id: 'both', label: 'Movies + Shows' }, { id: 'movies', label: 'Movies Only' }, { id: 'shows', label: 'Shows Only' }].map(s => (
+                      <button
+                        key={s.id}
+                        onClick={() => setRecentlyAddedListSettings(prev => ({ ...prev, source: s.id }))}
+                        style={{
+                          padding: '0.5rem 1rem',
+                          borderRadius: '20px',
+                          border: recentlyAddedListSettings.source === s.id ? '2px solid #00d4ff' : '2px solid var(--border-color)',
+                          backgroundColor: recentlyAddedListSettings.source === s.id ? 'rgba(0, 212, 255, 0.15)' : 'var(--card-bg, #1e1e2e)',
+                          color: 'var(--text-color, #fff)',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Duration / Max Items / Days Back */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.9rem' }}>Duration (seconds)</label>
+                    <input
+                      type="number" min="5" max="30"
+                      value={recentlyAddedListSettings.duration}
+                      onChange={(e) => setRecentlyAddedListSettings(prev => ({ ...prev, duration: parseInt(e.target.value, 10) || 10 }))}
+                      className="nx-input"
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.9rem' }}>Max Items</label>
+                    <input
+                      type="number" min="4" max="12"
+                      value={recentlyAddedListSettings.maxItems}
+                      onChange={(e) => setRecentlyAddedListSettings(prev => ({ ...prev, maxItems: parseInt(e.target.value, 10) || 8 }))}
+                      className="nx-input"
+                    />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.9rem' }}>Days Back</label>
+                    <input
+                      type="number" min="1" max="90"
+                      value={recentlyAddedListSettings.daysBack}
+                      onChange={(e) => setRecentlyAddedListSettings(prev => ({ ...prev, daysBack: parseInt(e.target.value, 10) || 30 }))}
+                      className="nx-input"
+                    />
+                  </div>
+                </div>
+
+                {/* Colors */}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.9rem' }}>Background Color</label>
+                    <input type="color" value={recentlyAddedListSettings.bgColor}
+                      onChange={(e) => setRecentlyAddedListSettings(prev => ({ ...prev, bgColor: e.target.value }))}
+                      style={{ width: '100%', height: '38px', cursor: 'pointer' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.9rem' }}>Text Color</label>
+                    <input type="color" value={recentlyAddedListSettings.textColor}
+                      onChange={(e) => setRecentlyAddedListSettings(prev => ({ ...prev, textColor: e.target.value }))}
+                      style={{ width: '100%', height: '38px', cursor: 'pointer' }} />
+                  </div>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.9rem' }}>Accent Color</label>
+                    <input type="color" value={recentlyAddedListSettings.accentColor}
+                      onChange={(e) => setRecentlyAddedListSettings(prev => ({ ...prev, accentColor: e.target.value }))}
+                      style={{ width: '100%', height: '38px', cursor: 'pointer' }} />
+                  </div>
+                </div>
+
+                {/* Server Name */}
+                <div style={{ marginBottom: '1rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.4rem', fontSize: '0.9rem' }}>Server Name (optional)</label>
+                  <input
+                    type="text"
+                    value={recentlyAddedListSettings.serverName}
+                    onChange={(e) => setRecentlyAddedListSettings(prev => ({ ...prev, serverName: e.target.value }))}
+                    placeholder="Your Server"
+                    className="nx-input"
+                    style={{ width: '100%' }}
+                  />
+                </div>
+
+                {/* Auto-regenerate */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem', backgroundColor: 'var(--bg-color)', borderRadius: '8px', marginBottom: '1rem' }}>
+                  <div>
+                    <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>Auto-regenerate after sync</div>
+                    <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)' }}>Automatically regenerate this list whenever Radarr/Sonarr sync finds new content</div>
+                  </div>
+                  <label className="nx-rockerswitch">
+                    <input
+                      type="checkbox"
+                      checked={recentlyAddedListSettings.autoRegen || false}
+                      onChange={(e) => setRecentlyAddedListSettings(prev => ({ ...prev, autoRegen: e.target.checked }))}
+                    />
+                    <span className="nx-rockerswitch-slider"></span>
+                  </label>
+                </div>
+
+                {/* Generate Button */}
+                <button
+                  onClick={handleGenerateRecentlyAddedList}
+                  disabled={recentlyAddedListGenerating}
+                  className="button"
+                  style={{ backgroundColor: '#00d4ff', color: '#000', display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1.5rem' }}
+                >
+                  {recentlyAddedListGenerating ? <><Loader2 size={16} className="spin" /> Generating...</> : <><Sparkles size={16} /> Generate Recently Added List</>}
+                </button>
+
+                {/* Generated Lists */}
+                <div>
+                  <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer' }}
+                    onClick={() => setRecentlyAddedListsCollapsed(!recentlyAddedListsCollapsed)}>
+                    {recentlyAddedListsCollapsed ? <ChevronRight size={18} /> : <ChevronDown size={18} />}
+                    Generated Recently Added Lists ({generatedRecentlyAddedLists.length})
+                  </h3>
+                  {!recentlyAddedListsCollapsed && (
+                    generatedRecentlyAddedLists.length === 0 ? (
+                      <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>No Recently Added Lists generated yet.</p>
+                    ) : (
+                      <div style={{ display: 'grid', gap: '0.75rem' }}>
+                        {generatedRecentlyAddedLists.map((list) => (
+                          <div key={list.filename} style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            padding: '0.75rem', backgroundColor: 'var(--bg-color)', borderRadius: '8px'
+                          }}>
+                            <div>
+                              <div style={{ fontWeight: 600 }}>{list.filename}</div>
+                              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+                                {(list.size_bytes / (1024 * 1024)).toFixed(1)} MB
+                              </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                              <button
+                                onClick={() => setPreviewingRecentlyAddedList(list)}
+                                className="button"
+                                style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.4rem 0.75rem', fontSize: '0.85rem' }}
+                                title="Preview"
+                              >
+                                <Eye size={14} />
+                              </button>
+                              <button
+                                onClick={() => handleDeleteRecentlyAddedList(list.filename)}
+                                className="button"
+                                style={{ backgroundColor: '#dc3545', display: 'flex', alignItems: 'center', gap: '0.25rem', padding: '0.4rem 0.75rem', fontSize: '0.85rem' }}
+                                title="Delete"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+          )}
+
         </>
       ) : (
-        <div style={{ 
+        <div style={{
           padding: '2rem', 
           textAlign: 'center', 
           backgroundColor: 'var(--bg-color)', 
@@ -35676,6 +36331,102 @@ const DashboardTiles = {
            }}>
              {previewingComingSoonList?.size && (
                <span>Size: {(previewingComingSoonList.size / (1024 * 1024)).toFixed(1)} MB</span>
+             )}
+           </div>
+         </div>
+       </div>
+     )}
+
+     {previewingRecentlyAddedList && (
+       <div
+         style={{
+           position: 'fixed',
+           top: 0,
+           left: 0,
+           right: 0,
+           bottom: 0,
+           backgroundColor: 'rgba(0,0,0,0.8)',
+           display: 'flex',
+           alignItems: 'center',
+           justifyContent: 'center',
+           zIndex: 9999
+         }}
+         onClick={() => setPreviewingRecentlyAddedList(null)}
+       >
+         <div
+           role="dialog"
+           aria-modal="true"
+           aria-label="Recently Added list preview"
+           style={{
+             backgroundColor: 'var(--card-bg)',
+             padding: '20px',
+             borderRadius: '12px',
+             maxWidth: '90%',
+             maxHeight: '90%',
+             position: 'relative',
+             border: '1px solid rgba(255,255,255,0.1)',
+             overflowY: 'auto'
+           }}
+           onClick={(e) => e.stopPropagation()}
+         >
+           <div style={{
+             display: 'flex',
+             justifyContent: 'space-between',
+             alignItems: 'center',
+             marginBottom: '1rem'
+           }}>
+             <h3 style={{ margin: 0, color: 'var(--text-color)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+               <Film size={22} style={{ color: '#00d4ff' }} />
+               Recently Added List - {previewingRecentlyAddedList?.filename?.includes('grid') ? 'Grid Layout' : 'List Layout'}
+             </h3>
+             <button
+               type="button"
+               aria-label="Close preview"
+               onClick={() => setPreviewingRecentlyAddedList(null)}
+               style={{
+                 background: 'transparent',
+                 border: 'none',
+                 fontSize: '1.5rem',
+                 cursor: 'pointer',
+                 color: 'var(--text-color)',
+                 padding: '0.25rem 0.5rem'
+               }}
+               title="Close preview"
+             >
+               <X size={20} />
+             </button>
+           </div>
+           <div>
+             <video
+               key={`video-ral-${previewingRecentlyAddedList?.filename}`}
+               controls
+               autoPlay
+               style={{
+                 width: '100%',
+                 maxHeight: '70vh',
+                 borderRadius: '8px',
+                 backgroundColor: '#000'
+               }}
+               onError={(e) => {
+                 console.error('Recently Added List video error:', e);
+                 alert('Failed to load video. The file may not be accessible.');
+               }}
+             >
+               <source src={apiUrl(`nexup/preroll/video/${encodeURIComponent(previewingRecentlyAddedList?.filename || '')}?t=${Date.now()}`)} type="video/mp4" />
+               Your browser does not support the video tag.
+             </video>
+           </div>
+           <div style={{
+             marginTop: '1rem',
+             fontSize: '0.85rem',
+             color: 'var(--text-secondary)',
+             display: 'flex',
+             gap: '1rem',
+             flexWrap: 'wrap',
+             alignItems: 'center'
+           }}>
+             {previewingRecentlyAddedList?.size_bytes && (
+               <span>Size: {(previewingRecentlyAddedList.size_bytes / (1024 * 1024)).toFixed(1)} MB</span>
              )}
            </div>
          </div>
