@@ -1066,8 +1066,11 @@ def _ensure_log_dir():
     Resolve a writable log directory with fallback:
       1) %ProgramData%\NeXroll\logs (if writable)
       2) %LOCALAPPDATA% or %APPDATA%\NeXroll\logs (if writable)
-      3) .\logs under current working directory (if writable)
-      4) cwd (as last resort)
+      3) $NEXROLL_DB_DIR/logs (if writable) — the Docker container's data
+         volume, owned by the PUID/PGID user; the app's own WORKDIR
+         (cwd fallback below) is root-owned in that setup and never writable
+      4) .\logs under current working directory (if writable)
+      5) cwd (as last resort)
     """
     candidates = []
     try:
@@ -1078,6 +1081,10 @@ def _ensure_log_dir():
             la = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
             if la:
                 candidates.append(os.path.join(la, "NeXroll", "logs"))
+        else:
+            data_dir = os.environ.get("NEXROLL_DB_DIR")
+            if data_dir:
+                candidates.append(os.path.join(data_dir, "logs"))
     except Exception:
         pass
     candidates.append(os.path.join(os.getcwd(), "logs"))

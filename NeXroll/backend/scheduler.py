@@ -36,6 +36,13 @@ def _get_log_path():
         la = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
         if la:
             candidates.append(os.path.join(la, "NeXroll", "logs"))
+    else:
+        # Docker's cwd (the app's WORKDIR) is root-owned when running under the
+        # fork's PUID/PGID entrypoint, so it's never writable by the app user —
+        # NEXROLL_DB_DIR (the /data volume, chowned to PUID/PGID) is.
+        data_dir = os.environ.get("NEXROLL_DB_DIR")
+        if data_dir:
+            candidates.append(os.path.join(data_dir, "logs"))
     candidates.append(os.path.join(os.getcwd(), "logs"))
     for log_dir in candidates:
         try:
