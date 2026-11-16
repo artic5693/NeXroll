@@ -1,10 +1,10 @@
-# NeXroll Intros — Emby Plugin
+# NeXroll Intros; Emby Plugin
 
 An Emby plugin that injects preroll intros from your **NeXroll** server before movies and episodes.
 
 ## How It Works
 
-Identical to the Jellyfin variant — the plugin implements Emby's `IIntroProvider` interface and calls your NeXroll server's `/plugin/intros` endpoint at playback time.
+Identical to the Jellyfin variant; the plugin provides Emby's `IIntroProvider` interface and calls your NeXroll server's `/plugin/intros` endpoint at playback time.
 
 ## Requirements
 
