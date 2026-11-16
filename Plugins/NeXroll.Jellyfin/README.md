@@ -1,12 +1,12 @@
-# NeXroll Intros — Jellyfin Plugin
+# NeXroll Intros; Jellyfin Plugin
 
-A Jellyfin plugin that injects preroll intros from your **NeXroll** server before movies and episodes — just like Plex Cinema Trailers, but powered by your NeXroll schedule, filler system, sequences, and Coming Soon lists.
+A Jellyfin plugin that injects preroll intros from your **NeXroll** server before movies and episodes; just like Plex Cinema Trailers, but powered by your NeXroll schedule, filler system, sequences, and Coming Soon lists.
 
 ## How It Works
 
 1. When a user starts playing a movie or episode, Jellyfin asks all registered `IIntroProvider` plugins for intro items.
 2. This plugin calls your NeXroll server's `/plugin/intros` endpoint to get the currently-active preroll paths in real time.
-3. The returned video files are injected before playback — respecting your active schedule, filler category/sequence, or Coming Soon list.
+3. The returned video files are injected before playback: respecting your active schedule, filler category/sequence, or Coming Soon list.
 
 ## Requirements
 
@@ -88,9 +88,9 @@ In the plugin config:
 
 The plugin calls these NeXroll endpoints:
 
-- **`GET /plugin/intros`** — Returns the currently-active preroll paths
+- **`GET /plugin/intros`**: Returns the currently-active preroll paths
   - Query params: `media_type`, `item_id`
   - Response: `{ "Items": [{"Path": "...", "Name": "..."}], "TotalRecordCount": N, "Mode": "shuffle|sequential|single" }`
 
-- **`GET /plugin/health`** — Simple health check
+- **`GET /plugin/health`**: Simple health check
   - Response: `{ "status": "ok", "app": "NeXroll" }`
